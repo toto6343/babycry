@@ -1,1 +1,16 @@
-sql스키마 가로안에 버전 정보 및 수정사항 간략히 적기
+1. sql스키마 제목 가로안에 버전 정보 기입
+2. README에 업데이트 내용 정리
+3. git에 업로드 전 이전 업데이트 내용 적용했는지 확인
+
+--------------------------------------------------
+25-11-17
+1. Oracel XE 버전에 맞게 DB 테이블 수정
+
+2. cry_event 테이블
+severity VARCHAR2(16) 필드 추가 (low/medium/high)
+cause는 모델이 주는 7가지 문자열 그대로 저장
+(hungry, burping, belly_pain, cold_hot, discomfort, emotional, tired)
+
+3. notification_log
+Twilio 전송 결과(SID, latency 등) 저장
+--------------------------------------------------
