@@ -1,0 +1,131 @@
+본 모듈은 아기 울음 분석 결과를 받아 보호자에게 즉시 문자(SMS) 알림을 보내는 기능을 담당합니다.
+모델/프론트엔드/인프라와 독립적으로 작동하며, DB는 단순 저장·조회 역할만 수행하도록 설계되어 있습니다.
+
+Node.js+Express로 작업/.env 파일 작성 필요
+-----------------------------------------------------------------------------------------
+1. 전체 구조 요약
+
+모델 서버 → (분석 결과 POST) → 알림 서버 → (Twilio SMS) → 보호자
+
+이 모듈은 “모델 결과를 받아 알림을 보낸다”는 하나의 파이프라인에 집중합니다.
+
+1) 모델 분석 결과 수신 API
+
+엔드포인트: POST /api/analysis/result
+
+모델이 최종 분석한 원인, 울음 여부, 울음 강도(severity), cry_event_id, infant_id를 서버로 전송.
+
+예시 요청:
+
+{
+  "cryEventId": 12,
+  "infantId": 4,
+  "isCrying": true,
+  "cause": "hungry",
+  "severity": "medium"
+}
+
+
+isCrying = true일 경우에만 알림 트리거.
+
+2) DB에서 보호자·아이 정보 조회
+
+테이블: guardian, infant
+
+기능:
+
+infant_id → 해당 아기 → 담당 guardian_id → 보호자 전화번호를 조회
+
+DB는 저장/조회만 수행하도록 설계
+
+알림 로직과 DB 스키마는 최대한 분리
+
+3) GPT 기반 조치 문구 생성
+
+모델이 보내준 원인 + 울음 강도(severity)를 기반으로 GPT가 1–2문장 조치 문구 생성.
+
+사용 모델: gpt-4.1-mini
+
+입력 정보
+
+cause(7가지 중 하나)
+
+infantName
+
+severity(low / medium / high)
+
+예:
+
+“배고픈 것으로 보입니다. 5분 이내에 수유를 시도해주세요.”
+
+4) 문자(SMS) 전송 – Twilio 연동
+
+Twilio Programmable Messaging 사용
+
+한글 메시지 전송 가능
+
+보호자 번호는 자동으로 E.164 형식(+82)으로 정규화
+
+전송 성공/실패 여부를 DB에 기록
+
+5) 알림 로그 저장
+
+테이블: notification_log
+
+저장 정보:
+
+event_id
+
+guardian_id
+
+전송 시간(sent_at)
+
+상태(sent/failed)
+
+Twilio message SID(provider_msg_id)
+
+전송 지연(latency_ms)
+
+이 기록은 추후 보고서/지표 분석에서 재사용됨.
+------------------------------------------------------------------------------
+2. 전체 동작 흐름 (전체 파이프라인)
+
+[1] 모델 서버
+   - 울음 원인/강도 분석 완료
+   - /api/analysis/result 로 POST
+
+[2] 알림 서버 (내가 만든 모듈)
+   - cryEventId / infantId 기반 DB 조회
+   - cause + severity 기반 GPT로 조치 문구 생성
+   - 보호자에게 Twilio SMS 전송
+   - notification_log 테이블에 기록
+
+[3] 향후 보고서 기능 (확장 고려)
+   - cry_event.severity
+   - notification_log
+   - action_log
+   등을 활용해 통계/패턴 분석 가능
+---------------------------------------------------------------------------
+3. 파일 구조 정리
+backend/
+├─ src/
+│  ├─ app.js                      # Express 초기 설정
+│  ├─ index.js                    # 서버 실행 진입점
+│  ├─ config/
+│  │  ├─ db.js                    # Oracle DB 연결
+│  │  ├─ openai.js                # GPT API 클라이언트
+│  │  └─ sms.js                   # Twilio 연동 + 번호 정규화
+│  ├─ routes/
+│  │  └─ analysisCallback.js      # 모델 결과 수신 API
+│  ├─ services/
+│     ├─ actionTextService.js     # GPT 조치 문구 생성
+│     └─ notificationService.js   # 전체 알림 로직 (DB→GPT→SMS→DB)
+---------------------------------------------------------------------
+4. .env 파일 형식
+ORACLE_USER=...
+ORACLE_PASSWORD=...
+ORACLE_CONNECT_STRING=localhost:.../XEPDB1
+OPENAI_API_KEY=...
+TWILIO_ACCOUNT_SID=...
+TWILIO_AUTH_TOKEN=...
+TWILIO_PHONE_NUMBER=...   # Twilio에서 받은 발신 번호(E.164 형식)
