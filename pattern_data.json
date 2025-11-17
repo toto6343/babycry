@@ -1,0 +1,140 @@
+{
+  "history": [
+    {
+      "timestamp": "2025-11-06T09:20:16.617884",
+      "reason": "hungry",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 9,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T09:21:41.157241",
+      "reason": "burping",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 9,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T09:21:49.907015",
+      "reason": "hungry",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 9,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T09:21:57.948044",
+      "reason": "discomfort",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 9,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T09:22:07.681049",
+      "reason": "hungry",
+      "duration": 180,
+      "severity": "low",
+      "hour": 9,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T10:32:31.238114",
+      "reason": "tired",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 10,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T10:32:47.660998",
+      "reason": "cold_hot",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 10,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T10:33:08.727785",
+      "reason": "discomfort",
+      "duration": 180,
+      "severity": "high",
+      "hour": 10,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T10:33:20.090156",
+      "reason": "noise",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 10,
+      "day_of_week": "목"
+    },
+    {
+      "timestamp": "2025-11-06T10:33:27.334995",
+      "reason": "scared",
+      "duration": 180,
+      "severity": "medium",
+      "hour": 10,
+      "day_of_week": "목"
+    }
+  ],
+  "patterns": {
+    "hourly": {
+      "peakHour": 9,
+      "peakHourCount": 5,
+      "mostActivePeriod": "morning",
+      "periodCounts": {
+        "morning": 8,
+        "afternoon": 0,
+        "evening": 0,
+        "night": 0
+      },
+      "hourlyDistribution": {
+        "9": 5,
+        "10": 3
+      }
+    },
+    "reason": {
+      "mostCommon": "hungry",
+      "distribution": {
+        "hungry": 3,
+        "discomfort": 2,
+        "burping": 1,
+        "tired": 1,
+        "cold_hot": 1
+      },
+      "averageDuration": {
+        "burping": 180.0,
+        "cold_hot": 180.0,
+        "discomfort": 180.0,
+        "hungry": 180.0,
+        "tired": 180.0
+      },
+      "percentages": {
+        "hungry": 37.5,
+        "discomfort": 25.0,
+        "burping": 12.5,
+        "tired": 12.5,
+        "cold_hot": 12.5
+      }
+    },
+    "frequency": {
+      "dailyAverage": 8.0,
+      "maxPerDay": 8,
+      "minPerDay": 8,
+      "totalDays": 1
+    },
+    "duration": {
+      "average": 180.0,
+      "median": 180.0,
+      "min": 180,
+      "max": 180,
+      "std": 0.0
+    },
+    "weekly": {
+      "busiestDay": "목",
+      "distribution": {
+        "목": 
