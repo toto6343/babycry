@@ -1,0 +1,168 @@
+1. 이 기능은 “독립적인 모듈”입니다
+
+기존 백엔드 구조를 거의 건드리지 않고 폴더만 복사하면 바로 붙는 구조입니다.
+
+다른 기능과 충돌을 피하기 위해:
+
+/src/db/oracle.js
+
+/src/services/*
+
+/src/routes/reportRoutes.js
+이 3곳만 신경 쓰면 됩니다.
+
+Express 프로젝트든, NestJS든, 기존 백엔드든 라우트만 붙이면 바로 작동합니다.
+
+2. DB 권한 필요 (Oracle XE 기준)
+
+이 모듈이 사용하는 테이블:
+
+cry_event
+
+pattern_analysis
+
+(추가로 필요하다면) infant
+
+필수 권한:
+
+SELECT ON cry_event
+SELECT ON pattern_analysis
+
+
+팀의 DB 계정이 위 테이블들을 읽을 수 있어야 합니다.
+
+3. .env 환경 변수는 꼭 별도 관리
+
+필요한 환경 변수:
+
+ORACLE_USER=
+ORACLE_PASSWORD=
+ORACLE_CONNECT_STRING=
+OPENAI_API_KEY=
+PORT=4000
+
+4. 서버 구조 요약
+src/
+ ├─ db/oracle.js            # Oracle 커넥션 풀
+ ├─ services/
+ │    ├─ reportSummaryService.js   # DB에서 통계 + 예측 데이터 조회
+ │    └─ aiReportService.js        # OpenAI 호출해서 보고서 생성
+ └─ routes/reportRoutes.js         # /api/reports/auto 라우트
+
+
+핵심 흐름은 아래와 같습니다:
+
+(1) reportRoutes.js   
+         ↓
+(2) reportSummaryService.js
+         ↓  DB에서 기간별 통계, 타입별 통계, 시간대별 통계, 다음 울음 예측 가져옴
+         ↓
+(3) aiReportService.js
+         ↓  OpenAI에게 스타일 가이드 + 데이터 전달
+         ↓
+AI 기반 보고서 생성(JSON)
+
+5. OpenAI 호출 시 비용 정책
+
+gpt-4.1-mini 또는 gpt-4.1 사용 중
+
+보고서 1회 생성 시 토큰 비용 발생
+
+프롬프트 + 보고서 길이에 따라 비용이 달라짐
+(일반적으로 몇 원 수준 → 보고서가 매우 길면 증가)
+
+주의:
+테스트용으로 많은 호출을 반복하면 비용이 올라갈 수 있으니
+
+Thunder Client / Postman 테스트 시 되도록 적게 호출할 것.
+
+6. API 사용법 (프론트엔드 기준)
+📍 URL
+GET /api/reports/auto
+
+📍 파라미터
+name	example	설명
+infantId	1	아이 ID
+startDate	2025-11-01	기간 시작일
+endDate	2025-11-07	기간 종료일
+📍 응답 예시
+{
+  "summaryData": {
+    "totalEvents": 23,
+    "avgDurationSeconds": 67,
+    "nextCryPredictionTime": "2025-11-19T14:30:00.000Z",
+    "byCryType": [...],
+    "byHour": [...]
+  },
+  "aiReport": "1. [요약] 이번 기간의 울음 현황...\n..."
+}
+
+
+프론트에서는 단순히:
+
+summaryData → 그래프 용 데이터
+
+aiReport → 보고서 텍스트 그대로 출력
+
+하면 됨.
+
+7. 보고서의 스타일은 강하게 고정됨
+
+OpenAI 보고서는 항상 아래 5개의 섹션을 사용하도록 강제됨:
+
+[요약] 이번 기간 울음 현황
+
+[울음 패턴 분석]
+
+[해석] 아기의 상태 추정
+
+[다음 울음 예측]
+
+[추천 행동] 보호자를 위한 제안
+
+그리고 다음 규칙을 반드시 따릅니다:
+
+한국어 존댓말
+
+보호자를 안심시키는 톤
+
+수치 설명 시 “설명 + 숫자”
+
+다음 울음 예측은 한국 시간(UTC+9)으로 변환
+
+마지막에 짧은 응원 문장 포함
+
+팀의 기획자가 원하는 보고서 스타일이 바뀌면
+→ aiReportService.js 내부의 REPORT_STYLE_GUIDE만 수정하면 됨.
+
+8. 팀 합칠 때 꼭 신경 쓰면 좋을 부분
+✔ 라우트 충돌 방지
+
+이 모듈은 /api/reports/** 경로 사용함.
+팀에서 이미 같은 라우트를 쓰고 있다면 경로 조정 필요.
+
+✔ 포트 충돌
+
+.env에 있는 PORT가 팀 서버와 겹치지 않도록 주의.
+
+✔ OpenAI 호출 오류 처리
+
+OpenAI API 키가 없거나 잘못되면 500 에러 발생.
+테스트할 때는 Thunder Client로 한번 호출해보는 것이 가장 빠름.
+
+✔ Oracle 커넥션 풀 중복
+
+기존 프로젝트에서도 DB 풀을 쓰고 있다면:
+
+이 모듈의 DB 설정을 기존 풀로 통합하거나,
+
+DB 설정 파일만 맞춰서 통일할 것.
+
+✔ CORS 설정 (프론트 연동 시)
+
+필요시 server.js에서:
+
+app.use(cors({ origin: "http://localhost:3000" }));
+
+
+같이 설정하면 됨.
