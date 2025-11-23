@@ -1,0 +1,63 @@
+# -------------------------------
+# 🔹 General
+# -------------------------------
+.DS_Store
+Thumbs.db
+*.log
+
+# -------------------------------
+# 🔹 Environment files
+# -------------------------------
+# Keep environment secrets out of git
+.env
+*/.env
+
+# -------------------------------
+# 🔹 Node-backend
+# -------------------------------
+node-backend/node_modules/
+node-backend/package-lock.json
+node-backend/dist/
+node-backend/logs/
+
+# Uploads (Python → Node 등)
+uploads/
+node-backend/uploads/
+
+# -------------------------------
+# 🔹 Python-backend
+# -------------------------------
+python-backend/venv/
+python-backend/__pycache__/
+python-backend/**/__pycache__/
+python-backend/*.pyc
+python-backend/*.pyo
+
+# cry history + model cache
+python-backend/backend/data/cry_history.json
+python-backend/backend/data/*.csv
+
+# 모델(pkl)은 필요하면 업로드, 아니면 ignore 가능
+# models/*.pkl
+
+# -------------------------------
+# 🔹 React Frontend
+# -------------------------------
+frontend/node_modules/
+frontend/build/
+frontend/.eslintcache
+
+# -------------------------------
+# 🔹 IDE / Tools
+# -------------------------------
+.vscode/
+.idea/
+*.iml
+
+# -------------------------------
+# 🔹 Oracle / System Generated
+# -------------------------------
+*.sql~
+*.db-journal
+*.sqlite
+oracle_client/
