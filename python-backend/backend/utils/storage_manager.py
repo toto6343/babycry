@@ -92,135 +92,81 @@ class StorageManager:
             print(f"   User: {self.db_config['user']}")
             return None
     
-    def ensure_guardian_exists(self, conn, guardian_id=1):
-        """guardian_id가 존재하는지 확인하고 없으면 생성"""
-        try:
-            cursor = conn.cursor()
-            
-            # guardian_id 존재 확인
-            cursor.execute("""
-                SELECT COUNT(*) FROM guardian WHERE guardian_id = :1
-            """, [guardian_id])
-            
-            count = cursor.fetchone()[0]
-            
-            if count == 0:
-                # guardian 생성
-                cursor.execute("""
-                    INSERT INTO guardian (guardian_id, name, phone, email, notification_pref)
-                    VALUES (:1, :2, :3, :4, 'both')
-                """, [guardian_id, f'보호자 {guardian_id}', '010-0000-0000', f'guardian{guardian_id}@example.com'])
-                
-                conn.commit()
-                print(f"✅ Created guardian_id={guardian_id} automatically")
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Failed to ensure guardian exists: {e}")
-            return False
-    
-    def ensure_infant_exists(self, conn, infant_id, guardian_id=1):
-        """infant_id가 존재하는지 확인하고 없으면 생성"""
-        try:
-            cursor = conn.cursor()
-            
-            # infant_id 존재 확인
-            cursor.execute("""
-                SELECT COUNT(*) FROM infant WHERE infant_id = :1
-            """, [infant_id])
-            
-            count = cursor.fetchone()[0]
-            
-            if count == 0:
-                # ⭐ 먼저 guardian이 존재하는지 확인
-                if not self.ensure_guardian_exists(conn, guardian_id):
-                    return False
-                
-                # infant 생성 (guardian_id는 필수)
-                cursor.execute("""
-                    INSERT INTO infant (infant_id, guardian_id, name, birth_date, gender)
-                    VALUES (:1, :2, :3, SYSDATE, 'other')
-                """, [infant_id, guardian_id, f'아기 {infant_id}'])
-                
-                conn.commit()
-                print(f"✅ Created infant_id={infant_id} with guardian_id={guardian_id} automatically")
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️ Failed to ensure infant exists: {e}")
-            import traceback
-            traceback.print_exc()
-            return False
-    
     def save_complete_event(self, event_data):
         """완전한 이벤트 저장 (DB + JSON)"""
-        
-        # 1. DB 저장
+
         audio_id = None
         event_id = None
-        
+
         if event_data.get('isCrying', False):
             conn = self.get_connection()
-            
+
             if conn:
                 try:
                     cursor = conn.cursor()
-                    
-                    # ⭐ infant_id 존재 여부 확인 및 생성
-                    infant_id = event_data.get('infant_id', 1)
-                    guardian_id = event_data.get('guardian_id', 1)  # guardian_id도 가져오기
-                    
-                    if not self.ensure_infant_exists(conn, infant_id, guardian_id):
-                        print(f"⚠️ Could not ensure infant_id={infant_id} exists")
-                        conn.close()
-                        # JSON 백업으로 계속 진행
+
+                    # ✅ 이제는 infant_id, guardian_id가 이미 존재한다고 "신뢰"
+                    infant_id = event_data.get('infant_id')
+                    guardian_id = event_data.get('guardian_id')
+
+                    if not infant_id:
+                        print("⚠️ infant_id가 전달되지 않았습니다. DB 저장을 건너뜁니다.")
                     else:
+                        # 🔥 더 이상 ensure_infant_exists 호출 안 함
+                        # if not self.ensure_infant_exists(conn, infant_id, guardian_id):
+                        #     ...
+
                         # audio_file 저장
                         audio_id_var = cursor.var(oracledb.NUMBER)
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             INSERT INTO audio_file (
                                 infant_id, storage_uri, duration_ms, 
                                 sample_rate, upload_time
                             )
                             VALUES (:1, :2, :3, :4, SYSTIMESTAMP)
                             RETURNING audio_id INTO :5
-                        """, [
-                            infant_id,
-                            event_data.get('storage_uri', ''),
-                            event_data.get('duration', 0) * 1000,
-                            event_data.get('sample_rate', 16000),
-                            audio_id_var
-                        ])
+                            """,
+                            [
+                                infant_id,
+                                event_data.get('storage_uri', ''),
+                                event_data.get('duration', 0) * 1000,
+                                event_data.get('sample_rate', 16000),
+                                audio_id_var,
+                            ],
+                        )
                         audio_id = int(audio_id_var.getvalue()[0])
-                        
+
                         # cry_event 저장
                         event_id_var = cursor.var(oracledb.NUMBER)
-                        cursor.execute("""
+                        cursor.execute(
+                            """
                             INSERT INTO cry_event (
                                 infant_id, event_time, duration_ms, confidence,
                                 severity, cry_type, detected_by, is_resolved
                             )
                             VALUES (:1, SYSTIMESTAMP, :2, :3, :4, :5, :6, 'N')
                             RETURNING event_id INTO :7
-                        """, [
-                            infant_id,
-                            event_data.get('duration', 0) * 1000,
-                            event_data.get('confidence', 0.0),
-                            event_data.get('severity', 'Unknown'),
-                            event_data.get('reason', 'unknown'),
-                            'model',
-                            event_id_var
-                        ])
+                            """,
+                            [
+                                infant_id,
+                                event_data.get('duration', 0) * 1000,
+                                event_data.get('confidence', 0.0),
+                                event_data.get('severity', 'Unknown'),
+                                event_data.get('reason', 'unknown'),
+                                'model',
+                                event_id_var,
+                            ],
+                        )
                         event_id = int(event_id_var.getvalue()[0])
-                        
+
                         conn.commit()
                         print(f"✅ DB 저장 완료: audio_id={audio_id}, event_id={event_id}")
-                    
+
                 except Exception as e:
                     print(f"⚠️ DB 저장 실패: {e}")
                     import traceback
+
                     traceback.print_exc()
                     conn.rollback()
                 finally:
@@ -298,6 +244,108 @@ class StorageManager:
         
         return []
     
+    def get_action_stats(self, infant_id, days=7):
+        """
+        특정 아기에 대해 최근 N일 동안 실행된 조치(action_log)를
+        울음 원인(cry_type) + action_detail 단위로 묶어서
+        시행 횟수 / 성공 횟수를 집계해서 반환합니다.
+        
+        반환 형식 예시:
+        {
+          "hungry": [
+            {
+              "detail": "수유 후 안아서 트림 시키기",
+              "trials": 5,
+              "success": 4,
+              "fail": 1,
+              "success_rate": 0.8
+            },
+            ...
+          ],
+          "tired": [
+            ...
+          ]
+        }
+        """
+        conn = self.get_connection()
+        if not conn:
+            return {}
+
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT
+                    e.cry_type,
+                    a.action_detail,
+                    a.result
+                FROM action_log a
+                JOIN cry_event e
+                  ON a.event_id = e.event_id
+                WHERE e.infant_id = :infant_id
+                  AND e.event_time >= SYSDATE - :days
+                """,
+                [infant_id, days]
+            )
+            rows = cursor.fetchall()
+
+            stats = {}  # { cry_type: { detail: {trials, success, fail} } }
+
+            for cry_type, action_detail, result in rows:
+                if not cry_type:
+                    cry_type = 'unknown'
+                if not action_detail:
+                    continue
+
+                if cry_type not in stats:
+                    stats[cry_type] = {}
+
+                if action_detail not in stats[cry_type]:
+                    stats[cry_type][action_detail] = {
+                        "detail": action_detail,
+                        "trials": 0,
+                        "success": 0,
+                        "fail": 0,
+                    }
+
+                entry = stats[cry_type][action_detail]
+                entry["trials"] += 1
+
+                res = (result or "").lower()
+                if res == "success":
+                    entry["success"] += 1
+                elif res == "fail":
+                    entry["fail"] += 1
+
+            # success_rate 계산 + 리스트 형태로 변환
+            result_dict = {}
+            for cry_type, actions_dict in stats.items():
+                actions_list = []
+                for detail, entry in actions_dict.items():
+                    trials = entry["trials"]
+                    success = entry["success"]
+                    success_rate = success / trials if trials > 0 else 0.0
+                    actions_list.append({
+                        **entry,
+                        "success_rate": success_rate,
+                    })
+
+                # 성공률 + 시행 횟수 기준으로 정렬
+                actions_list.sort(
+                    key=lambda x: (x["success_rate"], x["trials"]),
+                    reverse=True
+                )
+                result_dict[cry_type] = actions_list
+
+            return result_dict
+
+        except Exception as e:
+            print(f"⚠️ get_action_stats 실패: {e}")
+            return {}
+        finally:
+            conn.close()
+
+
     def test_connection(self):
         """DB 연결 테스트"""
         conn = self.get_connection()

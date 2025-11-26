@@ -44,9 +44,19 @@ function severityToKorean(severity) {
  * OpenAI를 사용해 보호자에게 보여줄 "추천 조치 문장" 생성
  * - OpenAI 호출이 실패하면 (5xx 등) 기본 문장으로 graceful fallback
  */
-export async function createActionText(cause, infantName, severity) {
+export async function createActionText(cause, infantName, severity, bestActions = []) {
   const causeKorean = mapCauseToKorean(cause);
   const severityKo = severityToKorean(severity);
+
+  // 과거 조치 요약 텍스트
+  let historyText = '과거 보호자 조치 기록이 충분하지 않습니다.';
+  if (bestActions.length > 0) {
+    const lines = bestActions.slice(0, 3).map((a, idx) => {
+      const rate = Math.round(a.successRate * 100);
+      return `${idx + 1}. "${a.detail}"  — 시도 횟수: ${a.trials}회, 성공률: ${rate}%`;
+    });
+    historyText = lines.join('\n');
+  }
 
   const prompt = `
 너는 아기를 돌보는 보호자에게 간단한 조치 방법을 알려주는 도우미야.
@@ -56,7 +66,14 @@ export async function createActionText(cause, infantName, severity) {
 - 울음의 원인(추정): ${causeKorean}
 - 울음의 강도: ${severityKo}
 
-문장은 공손하지만 너무 딱딱하지 않게 써줘.
+[과거 보호자 조치 기록 요약]
+${historyText}
+
+규칙:
+- 위 과거 조치 기록 중에서 "시행 횟수"와 "성공률"이 높은 조치들을 우선 참고해서,
+  보호자에게 가장 도움이 될 만한 조치를 제안해줘.
+- 단, 그대로 복붙하지 말고 현재 원인과 강도를 고려해서 자연스럽게 재구성해.
+- 문장은 공손하지만 너무 딱딱하지 않게 써줘.
 `;
 
   try {

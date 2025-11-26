@@ -1,11 +1,11 @@
 """
-Chatbot Service - ChatGPT API 통합
+Chatbot Service - Claude API 통합
 """
 import os
 import uuid
 from datetime import datetime
 from typing import List, Dict, Optional
-from openai import OpenAI
+from anthropic import Anthropic
 
 try:
     from backend.utils.storage_manager import get_storage_manager
@@ -15,16 +15,15 @@ except ImportError:
 
 
 class ChatbotService:
-    """AI 챗봇 서비스 (ChatGPT API)"""
+    """AI 챗봇 서비스 (Claude API)"""
     
     def __init__(self):
-        api_key = os.getenv('OPENAI_API_KEY')
+        api_key = os.getenv('ANTHROPIC_API_KEY')
         if not api_key:
-            raise ValueError("OPENAI_API_KEY 환경변수가 설정되지 않았습니다")
+            raise ValueError("ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다")
         
-        self.client = OpenAI(api_key=api_key)
-        # gpt-4o, gpt-4-turbo, gpt-3.5-turbo 등 선택 가능
-        self.model = os.getenv('OPENAI_MODEL', 'gpt-4o')
+        self.client = Anthropic(api_key=api_key)
+        self.model = os.getenv('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
     
     def generate_response(
         self,
@@ -41,10 +40,7 @@ class ChatbotService:
         system_prompt = self._build_system_prompt(infant_id)
         
         # 메시지 히스토리 구성
-        messages = [
-            {"role": "system", "content": system_prompt}
-        ]
-        
+        messages = []
         if conversation_history:
             for msg in conversation_history[-10:]:  # 최근 10개만
                 messages.append({
@@ -59,15 +55,16 @@ class ChatbotService:
         })
         
         try:
-            # ChatGPT API 호출
-            response = self.client.chat.completions.create(
+            # Claude API 호출
+            response = self.client.messages.create(
                 model=self.model,
-                messages=messages,
                 max_tokens=2000,
+                system=system_prompt,
+                messages=messages,
                 temperature=0.7
             )
             
-            assistant_message = response.choices[0].message.content
+            assistant_message = response.content[0].text
             
             # 긴급도 및 제안 액션 분석
             urgency, actions = self._analyze_response(user_message, assistant_message)
@@ -81,7 +78,7 @@ class ChatbotService:
             }
             
         except Exception as e:
-            raise Exception(f"ChatGPT API 호출 실패: {str(e)}")
+            raise Exception(f"Claude API 호출 실패: {str(e)}")
     
     def _build_system_prompt(self, infant_id: int) -> str:
         """시스템 프롬프트 생성"""
@@ -118,9 +115,6 @@ class ChatbotService:
 - 월령: {context.get('age_months', '알 수 없음')}개월
 - 최근 7일 울음 패턴: {context.get('cry_patterns', '데이터 없음')}
 
-**최근 보호자 조치 패턴(지난 7일):**
-{context.get('action_patterns_text', '조치 데이터 없음')}
-
 위 데이터를 참고하여 맞춤형 조언을 제공하세요.
 """
             except Exception as e:
@@ -129,11 +123,11 @@ class ChatbotService:
         return base_prompt
     
     def _get_infant_context(self, infant_id: int) -> Optional[Dict]:
-        """아기의 최근 데이터 수집 (울음 패턴 + 조치 패턴)"""
+        """아기의 최근 데이터 수집"""
         try:
             storage = get_storage_manager()
             
-            # 1) 최근 울음 히스토리
+            # 최근 7일 울음 히스토리
             history = storage.get_history(infant_id, limit=50)
             
             if not history:
@@ -145,37 +139,12 @@ class ChatbotService:
                 reason = event.get('reason', 'unknown')
                 cry_counts[reason] = cry_counts.get(reason, 0) + 1
             
+            # 가장 빈번한 울음 원인
             most_common = max(cry_counts, key=cry_counts.get) if cry_counts else 'unknown'
             
-            # 2) 최근 조치 통계 (action_log 기반)
-            #    최근 7일 동안의 조치 집계
-            action_stats = {}
-            try:
-                action_stats = storage.get_action_stats(infant_id, days=7)
-            except Exception as e:
-                print(f"조치 통계 수집 실패: {e}")
-                action_stats = {}
-            
-            # 조치 패턴을 간단한 문자열로 요약 (챗봇 프롬프트에 넣기 좋게)
-            action_summaries = []
-            for cry_type, actions in action_stats.items():
-                if not actions:
-                    continue
-                top_action = actions[0]  # 성공률/횟수 기준 상위 1개
-                rate = int(top_action["success_rate"] * 100)
-                action_summaries.append(
-                    f"- {cry_type} 울음일 때 자주 사용된 조치: "
-                    f"\"{top_action['detail']}\" (시행 {top_action['trials']}회, 성공률 {rate}%)"
-                )
-            
-            action_patterns_text = "\n".join(action_summaries) if action_summaries else "최근 7일 간 기록된 조치 데이터가 충분하지 않습니다."
-            
             return {
-                'age_months': 'N/A',  # 나중에 DB에서 가져오면 교체
-                'cry_patterns': f"{most_common} ({cry_counts.get(most_common, 0)}회)",
-                'cry_counts': cry_counts,
-                'action_patterns_text': action_patterns_text,
-                'raw_action_stats': action_stats,
+                'age_months': 'N/A',  # DB에서 가져와야 함
+                'cry_patterns': f"{most_common} ({cry_counts.get(most_common, 0)}회)"
             }
             
         except Exception as e:

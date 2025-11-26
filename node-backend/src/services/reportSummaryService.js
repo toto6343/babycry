@@ -107,7 +107,10 @@ async function fetchNextCryPrediction(conn, infantId) {
 
   const row = result.rows[0];
   const predicted = row.PREDICTED_NEXT_TIME;
-  return predicted ? predicted.toISOString() : null;
+
+  if (!predicted) return null;
+  const dateObj = (predicted instanceof Date) ? predicted : new Date(predicted);
+  return dateObj.toISOString();
 }
 
 /*

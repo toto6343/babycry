@@ -25,9 +25,16 @@ CREATE TABLE guardian (
   guardian_id        NUMBER(19) PRIMARY KEY,
   name               VARCHAR2(100) NOT NULL,
   phone              VARCHAR2(32)  NOT NULL,
-  email              VARCHAR2(254),
+  email              VARCHAR2(254) NOT NULL,
+  password_hash      VARCHAR2(255),  -- 앱에서 회원가입 시 반드시 채우기
+  password_salt      VARCHAR2(255),
+  email_verified     NUMBER(1) DEFAULT 0 CHECK (email_verified IN (0,1)),
+  status             VARCHAR2(16) DEFAULT 'active'
+                     CHECK (status IN ('active','blocked','deleted')),
   notification_pref  VARCHAR2(16)  DEFAULT 'sms' CHECK (notification_pref IN ('sms','push','both')),
+  last_login_at      TIMESTAMP(6),
   created_at         TIMESTAMP(6) DEFAULT SYSTIMESTAMP
+  CONSTRAINT uk_guardian_email UNIQUE (email)
 );
 
 -- 2) 아이
@@ -87,7 +94,6 @@ CREATE TABLE cry_event (
 CREATE TABLE action_log (
   action_id     NUMBER(19) PRIMARY KEY,
   event_id      NUMBER(19) NOT NULL,
-  action_type   VARCHAR2(32) NOT NULL,
   action_detail VARCHAR2(4000),
   result        VARCHAR2(32),
   executed_at   TIMESTAMP(6) DEFAULT SYSTIMESTAMP,
@@ -100,6 +106,7 @@ CREATE TABLE notification_log (
   notification_id NUMBER(19) PRIMARY KEY,
   event_id        NUMBER(19) NOT NULL,
   guardian_id     NUMBER(19) NOT NULL,
+  action_text VARCHAR2(4000),
   channel         VARCHAR2(16) NOT NULL CHECK (channel IN ('sms','push','both')),
   sent_at         TIMESTAMP(6),
   status          VARCHAR2(16) CHECK (status IN ('sent','failed','queued')),
@@ -132,6 +139,14 @@ CREATE TABLE pattern_analysis (
   predicted_next_time TIMESTAMP(6),
   created_at          TIMESTAMP(6) DEFAULT SYSTIMESTAMP,
   CONSTRAINT fk_pattern_infant FOREIGN KEY (infant_id) REFERENCES infant(infant_id)
+);
+
+-- 10) 임베딩 저장용
+CREATE TABLE action_embedding (
+  action_id      NUMBER PRIMARY KEY,    -- action_log.action_id 와 1:1
+  model_name     VARCHAR2(100),
+  embedding_json CLOB,                  -- JSON 배열(text-embedding-3-small 결과)
+  created_at     TIMESTAMP DEFAULT SYSTIMESTAMP
 );
 
 -- ========================================

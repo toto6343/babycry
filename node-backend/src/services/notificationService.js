@@ -3,6 +3,7 @@ import oracledb from 'oracledb';
 import { getConnection } from '../db/oracle.js';
 import { createActionText } from './actionTextService.js';
 import { sendSms, normalizeKoreanPhone } from '../config/sms.js';
+import { getBestActionGroupsForCause } from '../services/actionSuggestionService.js';
 
 /**
  * 원인 코드를 한글 짧은 설명으로 변환 (문자 본문용)
@@ -68,7 +69,8 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
   const { infantName, guardianId, guardianPhone } = info;
 
   // 2. GPT로 조치 문구 생성 (severity 함께 전달)
-  const actionText = await createActionText(cause, infantName, severity);
+  const bestActions = await getBestActionGroupsForCause(cause, { minTrials: 2 });
+  const actionText = await createActionText(cause, infantName, severity, bestActions);
 
   // 3. 문자 내용 만들기
   const smsBody = buildSmsBody({
@@ -109,6 +111,7 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
     status: sendResult.success ? 'sent' : 'failed',
     providerMsgId: sendResult.messageId,
     latencyMs,
+    actionText,
   });
 }
 
@@ -184,6 +187,7 @@ async function saveNotificationLog({
   status,
   providerMsgId,
   latencyMs,
+  actionText,
 }) {
   const conn = await getConnection();
   try {
@@ -196,7 +200,8 @@ async function saveNotificationLog({
         sent_at,
         status,
         provider_msg_id,
-        latency_ms
+        latency_ms,
+        action_text
       ) VALUES (
         :eventId,
         :guardianId,
@@ -204,7 +209,8 @@ async function saveNotificationLog({
         SYSTIMESTAMP,
         :status,
         :providerMsgId,
-        :latencyMs
+        :latencyMs,
+        :actionText
       )
       `,
       {
@@ -214,6 +220,7 @@ async function saveNotificationLog({
         status,
         providerMsgId,
         latencyMs,
+        actionText,
       },
       { autoCommit: true }
     );
