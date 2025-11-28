@@ -1,0 +1,302 @@
+1. 실행 방법
+1-1. Node-backend 실행
+cd Final_Project/node-backend
+npm install
+npm start
+
+
+정상 로그 예시:
+
+Oracle connection pool created
+Node server running at http://localhost:4000
+
+1-2. Python-backend 실행
+가상환경 생성 및 파이썬 3.11. 버전 필요
+cd Final_Project/python-backend
+python -m venv venv
+venv\Scripts\activate
+
+라이브러리 설치
+pip install -r requirements.txt
+
+서버 실행
+uvicorn main:app --reload --port 8001
+
+
+정상 실행 로그:
+
+Uvicorn running on http://localhost:8001
+All models loaded successfully!
+DB 연결 성공
+
+1-3. Frontend 실행
+cd Final_Project/frontend
+npm install
+npm start
+-------------------------------------------------------------------------
+2. 환경변수 설정
+.env 파일은 node-backend, python-backend 안에 각각 1개씩 필요
+
+2-1. node-backend/.env
+DB_USER=babycry
+DB_PASSWORD=YOUR_PASSWORD
+DB_DSN=localhost:1521/XEPDB1
+
+ORACLE_USER=babycry
+ORACLE_PASSWORD=YOUR_PASSWORD
+ORACLE_CONNECT_STRING=localhost:1521/XEPDB1
+
+OPENAI_API_KEY=sk-xxxx
+OPENAI_MODEL=gpt-4.1-mini
+
+TWILIO_ACCOUNT_SID=ACxxxx
+TWILIO_AUTH_TOKEN=xxxx
+TWILIO_PHONE_NUMBER=+1xxxx
+
+PORT=4000
+
+2-2. python-backend/.env
+DB_USER=babycry
+DB_PASSWORD=YOUR_PASSWORD
+DB_DSN=localhost:1521/XEPDB1
+
+CRY_SENSITIVITY=balanced
+NOTIFICATION_URL=http://localhost:4000/api/analysis/result
+---------------------------------------------------------------------------
+3. 프로젝트 구조
+Final_Project/
+  ├─ node-backend/
+  ├─ python-backend/
+  ├─ frontend/
+  ├─ models/
+  └─ db/
+---------------------------------------------------------------------------
+DB는 XEPDB1만으로 테스트 했음. XE로 변경시 위 환경변수 내용 수정 필요
+---------------------------------------------------------------------------
+향후 해야할 것들
+1) 대쉬보드 및 UI/UX 개선
+2) 울음 원인에 따른 오디오 파일 재생 기능 지원
+---------------------------------------------------------------------------
+2025-11-26
+업데이트 현황:
+- tired, emotional 상태에 대응하는 로컬 음악파일 재생 기능
+- action_log 기록/수정/삭제 기능
+- action_log가 반영된 조치 추천
+- action_log 및 db 데이터가 반영된 챗봇
+- DB 스키마 변경(테이블 추가+컬럼 삭제)
+- python api flask 삭제
+- 그외 프로토타입 UI(frontend 파일 참고 가능)
+---------------------------------------------------------------------------
+UI 팀을 위한 전체 기능 정리 (Figma 작업 가이드)
+1. 로그인 / 회원가입 (Auth)
+기능 요약
+- 보호자 계정을 생성하고 로그인하는 기능.
+
+필요한 API
+- POST /api/auth/register
+- POST /api/auth/login
+
+UI 입력값
+- name
+- email
+- password
+- phone(선택)
+
+로그인 성공 후 처리
+- JWT 토큰을 localStorage에 저장
+- 이후 모든 API 요청 시 Authorization 헤더에 Bearer 토큰 포함
+
+UI 요구사항
+- 로그인 폼(이메일/비밀번호)
+- 회원가입 폼(이름/이메일/비밀번호/전화번호)
+- 오류 메시지 표시
+- 로그인 성공 후 아기 선택 또는 대시보드로 이동
+
+2. 아기 등록 / 아기 선택 페이지
+필요한 API
+- POST /api/infants
+- GET /api/infants
+
+UI 입력값
+- name
+- birthDate (YYYY-MM-DD)
+- gender
+- profileImage(선택)
+
+UI 요구사항
+- 내 아기 목록 표시
+- 아기 추가 버튼
+- 아기 선택 드롭다운(대시보드, 업로드, 챗봇에서 필요)
+
+3. 울음 분석 업로드 페이지
+기능 요약
+- 녹음 파일 업로드 → Python 분석 → Node 저장 → 알림 생성.
+
+API
+- POST /api/upload (FastAPI)
+
+업로드에 필요한 값
+- 파일(audio)
+- infant_id
+- guardian_id
+
+서버 응답 예시
+{
+  "message": "File received and processed",
+  "prediction": "hungry",
+  "severity": "High",
+  "confidence": 0.92
+}
+
+UI 요구사항
+- 파일 선택
+- 업로드 버튼
+- 업로드 진행 로딩
+- 분석 결과 표시(cry type, severity, confidence)
+
+4. 대시보드 페이지 (Dashboard)
+기능 요약
+- 아기의 울음 이벤트 목록, GPT 추천 조치, 보호자 조치 로그 표시.
+
+API
+- GET /api/actions/dashboard?infantId=#
+
+서버 응답 구조 예시
+{
+  "events": [
+    {
+      "eventId": 11,
+      "cryType": "hungry",
+      "severity": "High",
+      "confidence": 0.92,
+      "eventTime": "2024-01-13 10:23:11",
+      "notification": {
+        "actionText": "분유 온도를 확인해 주세요."
+      },
+      "actions": [
+        {
+          "actionId": 51,
+          "actionDetail": "분유를 데워 먹임",
+          "result": "success",
+          "executedAt": "2024-01-13 10:25:00"
+        }
+      ]
+    }
+  ]
+}
+
+UI 구성 요소
+  울음 이벤트 카드 목록
+  각 이벤트에 대해:
+  - 울음 타입, 심각도, 신뢰도, 시간
+  - GPT 추천 조치(actionText)
+  - 보호자 조치 기록 리스트
+  - 보호자 조치 수정/삭제 버튼
+  - 보호자 조치 입력 폼(ActionForm)
+
+5. 보호자 조치 CRUD 기능
+필요한 API
+- POST /api/actions/record (조치 기록)
+- PUT /api/actions/:actionId (조치 수정)
+- DELETE /api/actions/:actionId (조치 삭제)
+
+UI 요구사항
+조치 작성
+- textarea: actionDetail 입력
+- select: result 선택 (success, partial, fail)
+- 저장 버튼
+
+조치 수정
+- 기존 내용으로 textarea 열림
+- result 기존 값 표시
+- 저장 / 취소 버튼
+
+조치 삭제
+- 삭제 버튼 클릭 → confirm → 삭제 요청
+
+중요
+- 보호자 조치를 수정/삭제하면 통계와 추천 결과에도 즉시 반영됨.
+- 대시보드 새로고침 필요.
+
+6. 챗봇 페이지
+기능 요약
+- GPT 기반 육아 상담 인터페이스.
+
+API
+- POST /api/chatbot
+요청 형식
+{
+  "infantId": 3,
+  "guardianId": 12,
+  "message": "아기가 잠을 잘 안자요",
+  "history": [
+    {"role": "user", "content": "..."},
+    {"role": "assistant", "content": "..."}
+  ]
+}
+
+UI 구성 요소
+- 채팅 말풍선 형태 리스트
+- 입력창
+- 전송 버튼
+- 로딩 상태 표시
+
+7. 알림 서비스
+
+UI 팀이 직접 구현할 기능은 없음.
+다만 대시보드에는 다음 정보가 표시됨.
+
+1) GPT 추천 조치(actionText)
+2) 과거 알림 내용
+
+알림은 서버에서 자동으로 처리되며
+UI는 추천 문장(actionText)만 표시하면 됨.
+
+8. UI 팀이 알아야 하는 주요 DB 필드 요약
+infant
+- infant_id
+- name
+- birth_date
+- gender
+
+guardian
+- guardian_id
+- name
+- email
+- phone
+
+cry_event
+- event_id
+- infant_id
+- severity
+- cry_type
+- confidence
+- event_time
+
+action_log
+- action_id
+- event_id
+- action_detail
+- result
+- executed_at
+
+action_embedding
+- action_id
+- embedding (UI에서는 신경 쓸 필요 없음)
+
+9. UI 팀이 구현해야 하는 페이지 목록
+페이지:	기능
+로그인:	이메일/비밀번호 입력
+회원가입:	보호자 정보 입력
+아기 선택:	내 아기 목록, 아기 추가
+아기 등록:	아기 정보 입력
+울음 업로드:	파일 업로드, 결과 표시
+대시보드:	이벤트 카드, 조치 CRUD, 추천 조치
+챗봇:	채팅 UI
+
+10. UI 팀을 위한 핵심 정리
+1) infantId는 모든 기능에서 매우 중요 (선택 UI 필수)
+2) 조치 수정/삭제는 대시보드에서 수행
+3) GPT 추천 조치는 서버가 자동 생성 (편집 불가)
+4) 업로드는 FastAPI /api/upload 하나만 사용
+5) 모든 API는 JWT 인증 필요

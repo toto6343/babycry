@@ -1,0 +1,871 @@
+// src/DashboardPage.js (음악 자동재생 기능 추가)
+import React, { useState, useEffect } from 'react';
+import { dashboardAPI, actionAPI } from './api';
+import { useAuth } from './AuthContext';
+import MusicPlayer from './MusicPlayer';
+
+function DashboardPage() {
+  const { selectedInfant } = useAuth();
+  const [events, setEvents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (selectedInfant?.infantId) {
+      loadDashboard();
+    }
+  }, [selectedInfant?.infantId]);
+
+  const loadDashboard = async () => {
+    if (!selectedInfant?.infantId) {
+      setError('아기 정보를 선택해주세요.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError('');
+      
+      console.log('Loading dashboard for infant:', selectedInfant.infantId);
+      const response = await dashboardAPI.getEvents(selectedInfant.infantId);
+      
+      console.log('Dashboard response:', response.data);
+      setEvents(response.data.events || []);
+    } catch (err) {
+      console.error('Error loading dashboard:', err);
+      console.error('Error details:', {
+        message: err.message,
+        response: err.response?.data,
+        status: err.response?.status,
+        config: err.config
+      });
+      
+      let errorMessage = '대시보드를 불러오는데 실패했습니다.';
+      
+      if (err.response) {
+        const status = err.response.status;
+        const detail = err.response.data?.detail || err.response.data?.message;
+        
+        if (status === 404) {
+          errorMessage = '데이터를 찾을 수 없습니다. 울음 분석을 먼저 진행해주세요.';
+        } else if (status === 401) {
+          errorMessage = '인증이 필요합니다. 다시 로그인해주세요.';
+        } else if (status === 500) {
+          errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
+        } else if (detail) {
+          errorMessage = `${errorMessage} (${detail})`;
+        }
+      } else if (err.request) {
+        errorMessage = '서버에 연결할 수 없습니다. 서버가 실행 중인지 확인해주세요.';
+      } else {
+        errorMessage = `오류: ${err.message}`;
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleActionSaved = () => {
+    loadDashboard();
+  };
+
+  const getCryTypeLabel = (cryType) => {
+    const labelMap = {
+      hungry: '배고픔',
+      tired: '졸림',
+      uncomfortable: '불편함',
+      pain: '통증',
+      emotional: '감정적',
+    };
+    return labelMap[cryType] || cryType;
+  };
+
+  const getMostCommonCryType = (events) => {
+    if (events.length === 0) return '-';
+    const counts = {};
+    events.forEach(e => {
+      counts[e.cryType] = (counts[e.cryType] || 0) + 1;
+    });
+    const entries = Object.entries(counts);
+    if (entries.length === 0) return '-';
+    const max = entries.reduce((a, b) => a[1] > b[1] ? a : b);
+    return getCryTypeLabel(max[0]);
+  };
+
+  const stats = {
+    totalEvents: events.length,
+    resolvedEvents: events.filter(e => e.isResolved === 'Y').length,
+    avgConfidence: events.length > 0 
+      ? (events.reduce((sum, e) => sum + (e.confidence || 0), 0) / events.length * 100).toFixed(0)
+      : 0,
+    mostCommonType: getMostCommonCryType(events),
+  };
+
+  if (loading) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.loading}>
+          <div style={styles.spinner}></div>
+          <p>로딩 중...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.error}>
+          ⚠️ {error}
+          <button onClick={loadDashboard} style={styles.retryButton}>
+            다시 시도
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.header}>
+        <h1 style={styles.title}>📊 울음 이벤트 대시보드</h1>
+        <p style={styles.subtitle}>
+          {selectedInfant?.name || '아기'}의 울음 분석 결과와 조치 기록
+        </p>
+      </div>
+
+      {events.length > 0 && (
+        <div style={styles.statsGrid}>
+          <div style={styles.statCard}>
+            <div style={styles.statIcon}>📊</div>
+            <div style={styles.statValue}>{stats.totalEvents}</div>
+            <div style={styles.statLabel}>전체 이벤트</div>
+          </div>
+          <div style={styles.statCard}>
+            <div style={styles.statIcon}>✅</div>
+            <div style={styles.statValue}>{stats.resolvedEvents}</div>
+            <div style={styles.statLabel}>해결됨</div>
+          </div>
+          <div style={styles.statCard}>
+            <div style={styles.statIcon}>🎯</div>
+            <div style={styles.statValue}>{stats.avgConfidence}%</div>
+            <div style={styles.statLabel}>평균 신뢰도</div>
+          </div>
+          <div style={styles.statCard}>
+            <div style={styles.statIcon}>🔥</div>
+            <div style={styles.statValue}>{stats.mostCommonType}</div>
+            <div style={styles.statLabel}>가장 많은 울음</div>
+          </div>
+        </div>
+      )}
+
+      {events.length === 0 ? (
+        <div style={styles.emptyState}>
+          <div style={styles.emptyIcon}>📭</div>
+          <h3>아직 울음 이벤트가 없습니다</h3>
+          <p>울음 업로드 페이지에서 아기의 울음을 분석해보세요</p>
+        </div>
+      ) : (
+        <div style={styles.eventsGrid}>
+          {events.map((event) => (
+            <EventCard
+              key={event.eventId}
+              event={event}
+              onActionSaved={handleActionSaved}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 이벤트 카드 컴포넌트 (자동재생 기능 추가)
+function EventCard({ event, onActionSaved }) {
+  const [showActionForm, setShowActionForm] = useState(false);
+  const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
+
+  // 음악 재생 가능한 타입인지 확인
+  const canPlayMusic = ['tired', 'emotional'].includes(event.cryType);
+
+  // 자동재생 로직: 컴포넌트 마운트 시 음악 재생 가능한 타입이면 자동으로 플레이어 열기
+  useEffect(() => {
+    if (canPlayMusic && !hasAutoPlayed && !event.isResolved) {
+      // 약간의 지연 후 자동재생 (UX 개선)
+      const timer = setTimeout(() => {
+        setShowMusicPlayer(true);
+        setHasAutoPlayed(true);
+      }, 500);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [canPlayMusic, hasAutoPlayed, event.isResolved]);
+
+  const getCryTypeEmoji = (cryType) => {
+    const emojiMap = {
+      hungry: '🍼',
+      tired: '😴',
+      uncomfortable: '😣',
+      pain: '😭',
+      emotional: '🤗',
+    };
+    return emojiMap[cryType] || '👶';
+  };
+
+  const getCryTypeLabel = (cryType) => {
+    const labelMap = {
+      hungry: '배고픔',
+      tired: '졸림',
+      uncomfortable: '불편함',
+      pain: '통증',
+      emotional: '감정적',
+    };
+    return labelMap[cryType] || cryType;
+  };
+
+  const getCryTypeDescription = (cryType) => {
+    const descriptionMap = {
+      hungry: '아기가 배고픔을 느끼고 있습니다. 마지막 수유 시간을 확인하고 분유나 모유를 제공해주세요.',
+      tired: '아기가 피곤하고 졸려합니다. 조용하고 어두운 환경에서 재워주시고, 자장가를 들려주면 도움이 됩니다.',
+      uncomfortable: '아기가 불편함을 느끼고 있습니다. 기저귀 상태, 옷의 착용감, 실내 온도를 확인해주세요.',
+      pain: '아기가 통증을 느끼고 있을 수 있습니다. 배앓이, 가스, 또는 다른 불편함이 있는지 확인하고, 필요시 소아과 상담을 권장합니다.',
+      emotional: '아기가 감정적으로 위로가 필요합니다. 안아주고 부드럽게 말을 걸어주거나, 진정 음악을 들려주세요.',
+    };
+    return descriptionMap[cryType] || '아기의 울음 원인을 파악하고 적절한 조치를 취해주세요.';
+  };
+
+  const getSeverityColor = (severity) => {
+    const colorMap = {
+      High: '#f44336',
+      Medium: '#ff9800',
+      Low: '#4caf50',
+    };
+    return colorMap[severity] || '#757575';
+  };
+
+  return (
+    <div style={styles.eventCard}>
+      {/* 이벤트 헤더 */}
+      <div style={styles.eventHeader}>
+        <div style={styles.eventType}>
+          <span style={styles.eventEmoji}>{getCryTypeEmoji(event.cryType)}</span>
+          <span style={styles.eventTypeText}>{getCryTypeLabel(event.cryType)}</span>
+        </div>
+        <div style={styles.eventMeta}>
+          <span style={{
+            ...styles.severityBadge,
+            backgroundColor: getSeverityColor(event.severity),
+          }}>
+            {event.severity}
+          </span>
+          <span style={styles.confidence}>
+            신뢰도: {(event.confidence * 100).toFixed(0)}%
+          </span>
+        </div>
+      </div>
+
+      {/* 시간 */}
+      <div style={styles.eventTime}>
+        {new Date(event.eventTime).toLocaleString('ko-KR')}
+      </div>
+
+      {/* 울음 타입 설명 */}
+      <div style={styles.cryDescription}>
+        {getCryTypeDescription(event.cryType)}
+      </div>
+
+      {/* 음악 재생 섹션 (자동재생 알림 추가) */}
+      {canPlayMusic && (
+        <div style={styles.musicSection}>
+          <button
+            onClick={() => setShowMusicPlayer(true)}
+            style={styles.musicButton}
+          >
+            🎵 진정 음악 재생
+          </button>
+          {showMusicPlayer && (
+            <div style={styles.autoplayNotice}>
+              ✨ 진정 음악이 자동으로 재생됩니다
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* GPT 추천 조치 */}
+      {event.notification && (
+        <div style={styles.recommendation}>
+          <div style={styles.recommendationHeader}>
+            <span style={styles.recommendationIcon}>💡</span>
+            <span style={styles.recommendationTitle}>AI 추천 조치</span>
+          </div>
+          <div style={styles.recommendationText}>
+            {event.notification.actionText}
+          </div>
+        </div>
+      )}
+
+      {/* 보호자 조치 목록 */}
+      {event.actions && event.actions.length > 0 && (
+        <div style={styles.actionsSection}>
+          <div style={styles.actionsSectionHeader}>
+            📝 보호자 조치 기록 ({event.actions.length})
+          </div>
+          {event.actions.map((action) => (
+            <ActionItem
+              key={action.actionId}
+              action={action}
+              eventId={event.eventId}
+              onActionSaved={onActionSaved}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 조치 추가 버튼 */}
+      <div style={styles.cardFooter}>
+        {!showActionForm ? (
+          <button
+            onClick={() => setShowActionForm(true)}
+            style={styles.addActionButton}
+          >
+            ➕ 조치 기록 추가
+          </button>
+        ) : (
+          <ActionForm
+            eventId={event.eventId}
+            onCancel={() => setShowActionForm(false)}
+            onSaved={() => {
+              setShowActionForm(false);
+              onActionSaved();
+            }}
+          />
+        )}
+      </div>
+
+      {/* 음악 플레이어 모달 (자동재생) */}
+      {showMusicPlayer && (
+        <MusicPlayer
+          cryType={event.cryType}
+          onClose={() => setShowMusicPlayer(false)}
+          autoPlay={true}
+        />
+      )}
+    </div>
+  );
+}
+
+// 조치 아이템 컴포넌트
+function ActionItem({ action, eventId, onActionSaved }) {
+  const [isEditing, setIsEditing] = useState(false);
+
+  const handleDelete = async () => {
+    if (!window.confirm('이 조치 기록을 삭제하시겠습니까?')) return;
+
+    try {
+      await actionAPI.delete(action.actionId);
+      onActionSaved();
+    } catch (err) {
+      console.error('Error deleting action:', err);
+      alert('조치 삭제에 실패했습니다.');
+    }
+  };
+
+  const getResultEmoji = (result) => {
+    const emojiMap = {
+      success: '✅',
+      partial: '⚠️',
+      fail: '❌',
+    };
+    return emojiMap[result] || '📝';
+  };
+
+  const getResultLabel = (result) => {
+    const labelMap = {
+      success: '성공',
+      partial: '부분 성공',
+      fail: '실패',
+    };
+    return labelMap[result] || result;
+  };
+
+  if (isEditing) {
+    return (
+      <ActionForm
+        eventId={eventId}
+        existingAction={action}
+        onCancel={() => setIsEditing(false)}
+        onSaved={() => {
+          setIsEditing(false);
+          onActionSaved();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={styles.actionItem}>
+      <div style={styles.actionContent}>
+        <div style={styles.actionHeader}>
+          <span style={styles.actionResult}>
+            {getResultEmoji(action.result)} {getResultLabel(action.result)}
+          </span>
+          <span style={styles.actionTime}>
+            {new Date(action.executedAt).toLocaleString('ko-KR')}
+          </span>
+        </div>
+        <div style={styles.actionDetail}>{action.actionDetail}</div>
+      </div>
+      <div style={styles.actionButtons}>
+        <button
+          onClick={() => setIsEditing(true)}
+          style={styles.editButton}
+        >
+          ✏️
+        </button>
+        <button
+          onClick={handleDelete}
+          style={styles.deleteButton}
+        >
+          🗑️
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// 조치 입력 폼 컴포넌트
+function ActionForm({ eventId, existingAction, onCancel, onSaved }) {
+  const { selectedInfant, user } = useAuth();
+  const [formData, setFormData] = useState({
+    actionDetail: existingAction?.actionDetail || '',
+    result: existingAction?.result || 'success',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      if (existingAction) {
+        await actionAPI.update(existingAction.actionId, formData);
+      } else {
+        await actionAPI.record({
+          eventId,
+          infantId: selectedInfant.infantId,
+          guardianId: user.guardianId,
+          actionDetail: formData.actionDetail,
+          result: formData.result,
+        });
+      }
+      onSaved();
+    } catch (err) {
+      console.error('Error saving action:', err);
+      setError('조치 저장에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} style={styles.actionForm}>
+      <textarea
+        value={formData.actionDetail}
+        onChange={(e) => setFormData({ ...formData, actionDetail: e.target.value })}
+        placeholder="어떤 조치를 취했나요? (예: 분유를 먹였습니다)"
+        required
+        style={styles.textarea}
+        disabled={loading}
+        rows={3}
+      />
+
+      <div style={styles.resultSelector}>
+        <label style={styles.resultLabel}>결과:</label>
+        <select
+          value={formData.result}
+          onChange={(e) => setFormData({ ...formData, result: e.target.value })}
+          style={styles.select}
+          disabled={loading}
+        >
+          <option value="success">✅ 성공</option>
+          <option value="partial">⚠️ 부분 성공</option>
+          <option value="fail">❌ 실패</option>
+        </select>
+      </div>
+
+      {error && <div style={styles.formError}>{error}</div>}
+
+      <div style={styles.formButtons}>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={styles.cancelButton}
+          disabled={loading}
+        >
+          취소
+        </button>
+        <button
+          type="submit"
+          style={styles.saveButton}
+          disabled={loading}
+        >
+          {loading ? '저장 중...' : existingAction ? '수정' : '저장'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+const styles = {
+  container: {
+    maxWidth: '1200px',
+    margin: '0 auto',
+  },
+  header: {
+    marginBottom: '32px',
+  },
+  title: {
+    fontSize: '32px',
+    margin: '0 0 8px 0',
+    color: '#333',
+  },
+  subtitle: {
+    margin: 0,
+    color: '#666',
+    fontSize: '16px',
+  },
+  loading: {
+    textAlign: 'center',
+    padding: '60px 20px',
+  },
+  spinner: {
+    width: '50px',
+    height: '50px',
+    border: '5px solid #f3f3f3',
+    borderTop: '5px solid #1976d2',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+    margin: '0 auto 20px',
+  },
+  error: {
+    padding: '20px',
+    backgroundColor: '#ffebee',
+    color: '#c62828',
+    borderRadius: '12px',
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: '16px',
+    padding: '10px 20px',
+    backgroundColor: '#1976d2',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+  },
+  statsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+    gap: '16px',
+    marginBottom: '32px',
+  },
+  statCard: {
+    backgroundColor: 'white',
+    borderRadius: '12px',
+    padding: '24px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    textAlign: 'center',
+    transition: 'transform 0.2s',
+  },
+  statIcon: {
+    fontSize: '32px',
+    marginBottom: '12px',
+  },
+  statValue: {
+    fontSize: '28px',
+    fontWeight: '700',
+    color: '#1976d2',
+    marginBottom: '4px',
+  },
+  statLabel: {
+    fontSize: '13px',
+    color: '#666',
+    fontWeight: '500',
+  },
+  emptyState: {
+    textAlign: 'center',
+    padding: '80px 20px',
+    backgroundColor: 'white',
+    borderRadius: '16px',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  },
+  emptyIcon: {
+    fontSize: '64px',
+    marginBottom: '20px',
+  },
+  eventsGrid: {
+    display: 'grid',
+    gap: '24px',
+  },
+  eventCard: {
+    backgroundColor: 'white',
+    borderRadius: '16px',
+    padding: '24px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    transition: 'box-shadow 0.2s',
+  },
+  eventHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '12px',
+  },
+  eventType: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  eventEmoji: {
+    fontSize: '32px',
+  },
+  eventTypeText: {
+    fontSize: '24px',
+    fontWeight: '700',
+    color: '#333',
+  },
+  eventMeta: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  severityBadge: {
+    padding: '6px 12px',
+    borderRadius: '12px',
+    color: 'white',
+    fontSize: '12px',
+    fontWeight: '600',
+  },
+  confidence: {
+    fontSize: '14px',
+    color: '#666',
+  },
+  eventTime: {
+    fontSize: '14px',
+    color: '#999',
+    marginBottom: '12px',
+  },
+  cryDescription: {
+    fontSize: '14px',
+    color: '#555',
+    lineHeight: '1.6',
+    padding: '12px',
+    backgroundColor: '#f9f9f9',
+    borderRadius: '8px',
+    marginBottom: '16px',
+    border: '1px solid #e0e0e0',
+  },
+  musicSection: {
+    marginBottom: '16px',
+    padding: '16px',
+    backgroundColor: '#f3e5f5',
+    borderRadius: '12px',
+    border: '1px solid #ce93d8',
+  },
+  musicButton: {
+    width: '100%',
+    padding: '12px',
+    backgroundColor: '#9c27b0',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '15px',
+    fontWeight: '600',
+    transition: 'background-color 0.2s',
+  },
+  autoplayNotice: {
+    marginTop: '12px',
+    padding: '10px',
+    backgroundColor: '#fff',
+    borderRadius: '6px',
+    fontSize: '13px',
+    color: '#7b1fa2',
+    textAlign: 'center',
+    fontWeight: '500',
+  },
+  recommendation: {
+    backgroundColor: '#e3f2fd',
+    padding: '16px',
+    borderRadius: '12px',
+    marginBottom: '16px',
+    border: '1px solid #90caf9',
+  },
+  recommendationHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '8px',
+  },
+  recommendationIcon: {
+    fontSize: '20px',
+  },
+  recommendationTitle: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#1976d2',
+  },
+  recommendationText: {
+    fontSize: '15px',
+    color: '#333',
+    lineHeight: '1.6',
+  },
+  actionsSection: {
+    marginBottom: '16px',
+  },
+  actionsSectionHeader: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: '12px',
+  },
+  actionItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    padding: '12px',
+    backgroundColor: '#f9f9f9',
+    borderRadius: '8px',
+    marginBottom: '8px',
+  },
+  actionContent: {
+    flex: 1,
+  },
+  actionHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '6px',
+  },
+  actionResult: {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#333',
+  },
+  actionTime: {
+    fontSize: '12px',
+    color: '#999',
+  },
+  actionDetail: {
+    fontSize: '14px',
+    color: '#666',
+    lineHeight: '1.5',
+  },
+  actionButtons: {
+    display: 'flex',
+    gap: '4px',
+    marginLeft: '12px',
+  },
+  editButton: {
+    padding: '6px 10px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '16px',
+  },
+  deleteButton: {
+    padding: '6px 10px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    fontSize: '16px',
+  },
+  cardFooter: {
+    borderTop: '1px solid #e0e0e0',
+    paddingTop: '16px',
+  },
+  addActionButton: {
+    width: '100%',
+    padding: '12px',
+    backgroundColor: '#1976d2',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: '600',
+  },
+  actionForm: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  textarea: {
+    padding: '12px',
+    border: '1px solid #ddd',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontFamily: 'inherit',
+    resize: 'vertical',
+    outline: 'none',
+  },
+  resultSelector: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  resultLabel: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#333',
+  },
+  select: {
+    flex: 1,
+    padding: '10px',
+    border: '1px solid #ddd',
+    borderRadius: '8px',
+    fontSize: '14px',
+    outline: 'none',
+  },
+  formError: {
+    padding: '10px',
+    backgroundColor: '#ffebee',
+    color: '#c62828',
+    borderRadius: '6px',
+    fontSize: '13px',
+  },
+  formButtons: {
+    display: 'flex',
+    gap: '8px',
+  },
+  cancelButton: {
+    flex: 1,
+    padding: '10px',
+    backgroundColor: '#f5f5f5',
+    color: '#666',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+  },
+  saveButton: {
+    flex: 1,
+    padding: '10px',
+    backgroundColor: '#1976d2',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    fontWeight: '600',
+  },
+};
+
+export default DashboardPage;
