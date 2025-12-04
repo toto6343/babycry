@@ -9,23 +9,45 @@ function ChatbotPage() {
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const messagesEndRef = useRef(null);
+  const messagesAreaRef = useRef(null);
 
-  // 초기 환영 메시지
+  // 초기 환영 메시지 - selectedInfant 체크 추가
   useEffect(() => {
-    setMessages([
-      {
+    setIsInitialLoad(true);
+    if (selectedInfant && selectedInfant.name) {
+      const welcomeMessage = {
         role: 'assistant',
         content: `안녕하세요! 👋 ${selectedInfant.name}의 육아를 돕는 AI 상담사입니다. 궁금한 점이나 고민되는 부분을 편하게 말씀해 주세요.`,
         timestamp: new Date(),
-      },
-    ]);
+      };
+      setMessages([welcomeMessage]);
+    } else {
+      // selectedInfant가 없을 때 기본 메시지
+      const defaultMessage = {
+        role: 'assistant',
+        content: '안녕하세요! 👋 육아를 돕는 AI 상담사입니다. 궁금한 점이나 고민되는 부분을 편하게 말씀해 주세요.',
+        timestamp: new Date(),
+      };
+      setMessages([defaultMessage]);
+    }
+    
+    // 초기 로딩 시 스크롤을 맨 위로
+    setTimeout(() => {
+      if (messagesAreaRef.current) {
+        messagesAreaRef.current.scrollTop = 0;
+      }
+      setIsInitialLoad(false);
+    }, 100);
   }, [selectedInfant]);
 
-  // 메시지 추가 시 스크롤 하단 이동
+  // 메시지 추가 시 스크롤 하단 이동 (초기 로딩 제외)
   useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
+    if (!isInitialLoad && messages.length > 1) {
+      scrollToBottom();
+    }
+  }, [messages, isInitialLoad]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -58,8 +80,8 @@ function ChatbotPage() {
         }));
 
       const response = await chatbotAPI.sendMessage({
-        infantId: selectedInfant.infantId,
-        guardianId: user.guardianId,
+        infantId: selectedInfant?.infantId,
+        guardianId: user?.guardianId,
         message: userMessage.content,
         history: history,
       });
@@ -96,6 +118,17 @@ function ChatbotPage() {
     }
   };
 
+  // 로딩 중일 때 표시
+  if (!selectedInfant) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.loadingContainer}>
+          <p>아기 정보를 불러오는 중...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={styles.container}>
       <div style={styles.chatContainer}>
@@ -113,11 +146,17 @@ function ChatbotPage() {
         </div>
 
         {/* 메시지 영역 */}
-        <div style={styles.messagesArea}>
+        <div style={styles.messagesArea} ref={messagesAreaRef}>
           <div style={styles.messagesContainer}>
-            {messages.map((message, index) => (
-              <MessageBubble key={index} message={message} />
-            ))}
+            {messages.length === 0 ? (
+              <div style={styles.emptyState}>
+                <p>메시지를 불러오는 중...</p>
+              </div>
+            ) : (
+              messages.map((message, index) => (
+                <MessageBubble key={index} message={message} />
+              ))
+            )}
             
             {/* 로딩 인디케이터 */}
             {loading && (
@@ -237,6 +276,15 @@ const styles = {
     height: 'calc(100vh - 120px)',
     display: 'flex',
     flexDirection: 'column',
+    padding: '20px',
+  },
+  loadingContainer: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    height: '100%',
+    fontSize: '18px',
+    color: '#666',
   },
   chatContainer: {
     backgroundColor: 'white',
@@ -251,6 +299,7 @@ const styles = {
     padding: '20px 24px',
     borderBottom: '2px solid #f0f0f0',
     backgroundColor: '#fafafa',
+    flexShrink: 0,
   },
   headerContent: {
     display: 'flex',
@@ -258,33 +307,41 @@ const styles = {
     gap: '16px',
   },
   headerIcon: {
-    fontSize: '40px',
+    fontSize: '48px',
   },
   headerText: {
     flex: 1,
   },
   headerTitle: {
     margin: '0 0 4px 0',
-    fontSize: '24px',
+    fontSize: '28px',
     color: '#333',
   },
   headerSubtitle: {
     margin: 0,
-    fontSize: '14px',
+    fontSize: '16px',
     color: '#666',
   },
   messagesArea: {
     flex: 1,
-    overflow: 'hidden',
+    overflow: 'auto',
     backgroundColor: '#f9f9f9',
+    minHeight: 0,
   },
   messagesContainer: {
-    height: '100%',
-    overflowY: 'auto',
     padding: '24px',
     display: 'flex',
     flexDirection: 'column',
     gap: '16px',
+    minHeight: '100%',
+  },
+  emptyState: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    flex: 1,
+    color: '#999',
+    fontSize: '16px',
   },
   messageWrapper: {
     display: 'flex',
@@ -297,7 +354,7 @@ const styles = {
     alignItems: 'flex-start',
   },
   bubbleIcon: {
-    fontSize: '32px',
+    fontSize: '40px',
     flexShrink: 0,
   },
   bubbleContent: {
@@ -306,15 +363,15 @@ const styles = {
     gap: '4px',
   },
   messageText: {
-    padding: '12px 16px',
+    padding: '14px 18px',
     borderRadius: '12px',
-    fontSize: '15px',
-    lineHeight: '1.6',
+    fontSize: '20px',
+    lineHeight: '1.7',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
   },
   messageTime: {
-    fontSize: '11px',
+    fontSize: '13px',
     color: '#999',
     paddingLeft: '8px',
   },
@@ -330,8 +387,8 @@ const styles = {
     borderRadius: '12px',
   },
   typingDot: {
-    width: '8px',
-    height: '8px',
+    width: '10px',
+    height: '10px',
     backgroundColor: '#1976d2',
     borderRadius: '50%',
     animation: 'typing 1.4s infinite',
@@ -340,13 +397,15 @@ const styles = {
     padding: '12px 24px',
     backgroundColor: '#ffebee',
     color: '#c62828',
-    fontSize: '14px',
+    fontSize: '16px',
     borderTop: '1px solid #ef9a9a',
+    flexShrink: 0,
   },
   inputArea: {
     padding: '20px 24px',
     borderTop: '2px solid #f0f0f0',
     backgroundColor: 'white',
+    flexShrink: 0,
   },
   inputForm: {
     display: 'flex',
@@ -355,32 +414,33 @@ const styles = {
   },
   textarea: {
     flex: 1,
-    padding: '12px 16px',
+    padding: '14px 18px',
     border: '2px solid #e0e0e0',
     borderRadius: '12px',
-    fontSize: '15px',
+    fontSize: '18px',
     fontFamily: 'inherit',
     resize: 'none',
     outline: 'none',
     transition: 'border-color 0.2s',
   },
   sendButton: {
-    padding: '12px 24px',
+    padding: '14px 28px',
     backgroundColor: '#1976d2',
     color: 'white',
     border: 'none',
     borderRadius: '12px',
-    fontSize: '15px',
+    fontSize: '17px',
     fontWeight: '600',
     cursor: 'pointer',
     transition: 'background-color 0.2s',
     whiteSpace: 'nowrap',
-    height: '48px',
+    height: '52px',
   },
   tipsSection: {
     padding: '12px 24px',
     backgroundColor: '#f9f9f9',
     borderTop: '1px solid #f0f0f0',
+    flexShrink: 0,
   },
   tips: {
     display: 'flex',
@@ -388,10 +448,10 @@ const styles = {
     gap: '8px',
   },
   tipIcon: {
-    fontSize: '16px',
+    fontSize: '25px',
   },
   tipText: {
-    fontSize: '12px',
+    fontSize: '14px',
     color: '#666',
     lineHeight: '1.5',
   },

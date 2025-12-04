@@ -26,6 +26,8 @@ function mapCauseToKoreanForTitle(cause) {
       return '정서적 이유(불안, 외로움 등)로 보입니다.';
     case 'tired':
       return '피곤하거나 졸린 것으로 보입니다.';
+    case 'needs_attention':
+      return '관심이 필요한 것으로 보입니다.';
     default:
       return '원인을 정확히 파악하지 못했습니다.';
   }
@@ -94,25 +96,50 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
       status: 'no_phone',
       providerMsgId: null,
       latencyMs: 0,
+      actionText,
     });
 
     return; // 여기서 종료
   }
 
   const start = Date.now();
-  const sendResult = await sendSms({ to: normalizedPhone, body: smsBody });
-  const latencyMs = sendResult.latencyMs ?? (Date.now() - start);
+  let sendResult;
+  let smsStatus = 'failed';
+  let providerId = null;
 
-  // 5. notification_log 저장
+  try {
+    sendResult = await sendSms({ to: normalizedPhone, body: smsBody });
+    smsStatus = sendResult.success ? 'sent' : 'failed';
+    providerId = sendResult.messageId;
+  } catch (smsError) {
+    console.error('❌ SMS 전송 실패:', smsError.message);
+    
+    // Twilio 에러 코드별 처리
+    if (smsError.code === 21608) {
+      console.warn('⚠️ Twilio Trial 계정: 인증되지 않은 번호입니다.');
+      smsStatus = 'unverified_number';
+    } else if (smsError.code === 21211) {
+      console.warn('⚠️ 잘못된 전화번호 형식입니다.');
+      smsStatus = 'invalid_number';
+    } else {
+      smsStatus = 'error';
+    }
+  }
+
+  const latencyMs = Date.now() - start;
+
+  // 5. notification_log 저장 (성공/실패 모두)
   await saveNotificationLog({
     eventId: cryEventId,
     guardianId,
     channel: 'sms',
-    status: sendResult.success ? 'sent' : 'failed',
-    providerMsgId: sendResult.messageId,
+    status: smsStatus,
+    providerMsgId: providerId,
     latencyMs,
     actionText,
   });
+
+  console.log(`📊 알림 로그 저장 완료: status=${smsStatus}`);
 }
 
 function buildSmsBody({ infantName, isCrying, cause, actionText }) {
@@ -132,14 +159,9 @@ function buildSmsBody({ infantName, isCrying, cause, actionText }) {
 async function getInfantAndGuardian(infantId) {
   const conn = await getConnection();
   try {
-    // 디버그: 현재 DB 유저/컨테이너 확인
+    // 디버그: 현재 DB 유저 확인 (CON_NAME 제거)
     const debug = await conn.execute(
-      `
-      SELECT 
-        user AS username,
-        sys_context('USERENV','CON_NAME') AS con_name
-      FROM dual
-      `,
+      `SELECT user AS username FROM dual`,
       [],
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );

@@ -1,30 +1,28 @@
+import oracledb from 'oracledb';
 import dotenv from 'dotenv';
+import { initPool } from './src/db/oracle.js';  // ✅ initPool 추가
+
 dotenv.config();
 
-import app from './src/app.js';
-import { initPool, closePool } from './src/db/oracle.js';
-
-const PORT = process.env.PORT || 4000;
-
-async function startServer() {
+async function initialize() {
   try {
-    await initPool();
-
+    // 1. Oracle 연결 (pool 먼저 초기화)
+    await initPool();  // ✅ pool 초기화
+    
+    // 2. Express app 동적 import (라우터 로드 완료 후)
+    const appModule = await import('./src/app.js');
+    const app = appModule.default;
+    
+    // 3. 서버 시작
+    const PORT = process.env.PORT || 4000;
     app.listen(PORT, () => {
+      console.log(`✅ Node.js server running on port ${PORT}`);
       console.log(`Node server running at http://localhost:${PORT}`);
-      console.log(`- Auto report: GET /api/reports/auto?infantId=1&startDate=2025-11-01&endDate=2025-11-07`);
-      console.log(`- Analysis callback: POST /api/analysis/result`);
-    });
-
-    process.on('SIGINT', async () => {
-      console.log('\nGracefully shutting down...');
-      await closePool();
-      process.exit(0);
     });
   } catch (err) {
-    console.error('Failed to start server:', err);
+    console.error('❌ 서버 초기화 실패:', err);
     process.exit(1);
   }
 }
 
-startServer();
+await initialize();

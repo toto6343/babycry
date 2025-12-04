@@ -13,12 +13,18 @@ const router = express.Router();
 router.get('/dashboard', async (req, res) => {
   const { infantId } = req.query;
 
+  console.log('📊 [Dashboard API] 요청받음, infantId:', infantId);
+
   if (!infantId) {
+    console.log('❌ [Dashboard API] infantId 없음');
     return res.status(400).json({ message: 'infantId is required' });
   }
 
-  const conn = await getConnection();
+  let conn;
   try {
+    conn = await getConnection();
+    console.log('✅ [Dashboard API] DB 연결 성공');
+    
     const sql = `
       SELECT
         e.event_id,
@@ -26,6 +32,7 @@ router.get('/dashboard', async (req, res) => {
         e.cry_type,
         e.severity,
         e.confidence,
+        e.is_resolved,
         n.notification_id,
         n.sent_at,
         n.status AS notif_status,
@@ -43,11 +50,14 @@ router.get('/dashboard', async (req, res) => {
       ORDER BY e.event_time DESC, a.executed_at ASC
     `;
 
+    console.log('📤 [Dashboard API] SQL 실행 중...');
     const result = await conn.execute(
       sql,
       { infantId: Number(infantId) },
       { outFormat: oracledb.OUT_FORMAT_OBJECT }
     );
+
+    console.log('📥 [Dashboard API] SQL 결과 rows 수:', result.rows?.length || 0);
 
     const rows = result.rows || [];
     const byEvent = {};
@@ -62,6 +72,7 @@ router.get('/dashboard', async (req, res) => {
           cryType: row.CRY_TYPE,
           severity: row.SEVERITY,
           confidence: row.CONFIDENCE,
+          isResolved: row.IS_RESOLVED, // ✅ 추가!
           notification: row.NOTIFICATION_ID
             ? {
                 notificationId: row.NOTIFICATION_ID,
@@ -85,18 +96,25 @@ router.get('/dashboard', async (req, res) => {
       }
     }
 
+    const events = Object.values(byEvent);
+    console.log('✅ [Dashboard API] 최종 events 수:', events.length);
+    console.log('📋 [Dashboard API] events 샘플:', events.slice(0, 2));
+
     res.json({
       infantId: Number(infantId),
-      events: Object.values(byEvent),
+      events: events,
     });
   } catch (err) {
-    console.error('Error in /api/actions/dashboard:', err);
+    console.error('❌ [Dashboard API] 오류:', err);
     res.status(500).json({
       message: 'Error loading actions dashboard',
       error: err.message,
     });
   } finally {
-    await conn.close();
+    if (conn) {
+      await conn.close();
+      console.log('🔒 [Dashboard API] DB 연결 종료');
+    }
   }
 });
 
@@ -209,6 +227,10 @@ router.delete('/:actionId', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/actions/:actionId
+ * - 보호자가 조치 내용을 수정
+ */
 router.put('/:actionId', async (req, res) => {
   const { actionId } = req.params;
   const { actionDetail, result } = req.body;

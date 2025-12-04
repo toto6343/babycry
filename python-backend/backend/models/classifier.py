@@ -1,10 +1,3 @@
-"""
-CryClassifier - Baby Cry Classification Model Wrapper
-V15.1 호환 버전 (improved_v18.py 기반)
-
-이 파일은 backend/models/classifier.py에 저장하세요.
-"""
-
 import os
 import numpy as np
 import librosa
@@ -13,6 +6,11 @@ import joblib
 import warnings
 warnings.filterwarnings('ignore')
 
+"""
+✅ 수정 사항 (2024):
+- extract_features에 전처리 정규화 파이프라인 추가
+- 업로드 파일과 녹음 파일의 일관성 개선
+"""
 
 class CryClassifier:
     """
@@ -200,14 +198,45 @@ class CryClassifier:
     
     def extract_features(self, audio_path, duration=3.0):
         """
-        오디오 파일에서 특징 추출
-        improved_v18.py의 extract_features를 간소화한 버전
+        오디오 파일에서 특징 추출 (전처리 정규화 추가)
+        
+        ✅ 수정 사항:
+        - 샘플링 레이트 통일 (22050 Hz)
+        - 오디오 길이 정규화 (3초로 패딩/자르기)
+        - RMS 정규화 (볼륨 통일)
+        - 무음 구간 제거
+        
+        이 전처리 과정으로 업로드 파일과 녹음 파일의 분석 결과 일관성 향상
         """
         try:
+            # ✅ 명시적으로 22050 Hz로 로드
             y, sr = librosa.load(audio_path, duration=duration, sr=22050)
             
             if len(y) == 0:
                 return None
+            
+            # ✅ 오디오 길이 정규화 (3초로 패딩 또는 자르기)
+            target_length = int(sr * duration)
+            if len(y) < target_length:
+                # 짧으면 패딩
+                y = np.pad(y, (0, target_length - len(y)), mode='constant')
+            else:
+                # 길면 자르기
+                y = y[:target_length]
+            
+            # ✅ RMS 정규화 (볼륨 통일)
+            rms = np.sqrt(np.mean(y**2))
+            if rms > 0:
+                y = y / rms * 0.1  # 0.1로 정규화
+            
+            # ✅ 무음 구간 제거 (선택적)
+            y, _ = librosa.effects.trim(y, top_db=20)
+            
+            # 길이가 너무 짧아지면 다시 패딩
+            if len(y) < target_length:
+                y = np.pad(y, (0, target_length - len(y)), mode='constant')
+            else:
+                y = y[:target_length]
             
             features = []
             

@@ -15,12 +15,21 @@ router.post('/result', async (req, res) => {
       return res.status(200).json({ message: 'Not crying. No notification sent.' });
     }
 
-    await sendNotificationForEvent({ cryEventId, infantId, cause, severity });
+    // 알림 전송 시도 (실패해도 200 반환 - 분석 자체는 성공)
+    try {
+      await sendNotificationForEvent({ cryEventId, infantId, cause, severity });
+      res.status(200).json({ message: 'Notification sent successfully.' });
+    } catch (notifErr) {
+      console.error('⚠️ Notification failed but analysis succeeded:', notifErr.message);
+      res.status(200).json({ 
+        message: 'Analysis completed. Notification failed (see logs).',
+        notificationError: notifErr.message 
+      });
+    }
 
-    res.status(200).json({ message: 'Notification sent (or attempted).' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Error while sending notification.' });
+    console.error('❌ Analysis route error:', err);
+    res.status(500).json({ message: 'Error while processing analysis result.' });
   }
 });
 

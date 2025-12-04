@@ -1,391 +1,920 @@
 // src/ReportPage.js
 import React, { useState, useEffect } from 'react';
-import { reportAPI } from './api';
 import { useAuth } from './AuthContext';
+import axios from 'axios';
+import TextReport from './components/Textreport';
 
 function ReportPage() {
   const { selectedInfant } = useAuth();
-  const [reports, setReports] = useState([]);
+  const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
-  const [expandedReport, setExpandedReport] = useState(null);
+  const [dateRange, setDateRange] = useState({
+    startDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+    endDate: new Date().toISOString().split('T')[0]
+  });
+  
+  // ✅ 탭 상태 추가
+  const [activeTab, setActiveTab] = useState('summary'); // 'summary' | 'aiReport'
 
   useEffect(() => {
-    loadReports();
+    if (selectedInfant?.infantId && activeTab === 'summary') {
+      fetchReport();
+    }
   }, [selectedInfant]);
 
-  const loadReports = async () => {
+  const fetchReport = async () => {
+    if (!selectedInfant?.infantId) {
+      setError('아기를 선택해주세요.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+
     try {
-      setLoading(true);
-      setError('');
-      const response = await reportAPI.getAll(selectedInfant.infantId);
-      setReports(response.data || []);
+      const token = localStorage.getItem('token');
+      console.log('🔍 ===== Report 요청 시작 =====');
+      console.log('📋 infantId:', selectedInfant.infantId);
+      console.log('📋 infantName:', selectedInfant.name);
+      console.log('📋 dateRange:', dateRange);
+      console.log('📋 hasToken:', !!token);
+      console.log('📋 요청 URL:', `/api/reports/summary/${selectedInfant.infantId}`);
+
+      const response = await axios.get(`/api/reports/summary/${selectedInfant.infantId}`, {
+        params: {
+          startDate: dateRange.startDate,
+          endDate: dateRange.endDate
+        }
+      });
+      
+      console.log('✅ ===== Report 응답 성공 =====');
+      console.log('📊 응답 데이터:', response.data);
+      console.log('📊 총 이벤트 수:', response.data.summary?.totalEvents);
+      
+      setReport(response.data);
     } catch (err) {
-      console.error('Error loading reports:', err);
-      setError('보고서를 불러오는데 실패했습니다.');
+      console.error('❌ ===== Report 요청 실패 =====');
+      console.error('📋 에러 객체:', err);
+      console.error('📋 응답 상태:', err.response?.status);
+      console.error('📋 응답 데이터:', err.response?.data);
+      
+      if (err.response?.status === 401) {
+        setError('인증이 만료되었습니다. 다시 로그인해주세요.');
+      } else if (err.response?.status === 404) {
+        setError('리포트 API를 찾을 수 없습니다. 서버를 확인해주세요.');
+      } else if (err.response?.status === 500) {
+        setError(`서버 오류: ${err.response?.data?.message || '알 수 없는 오류'}`);
+      } else {
+        setError('리포트를 불러오는데 실패했습니다.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const handleGenerateReport = async () => {
-    if (!window.confirm('새로운 보고서를 생성하시겠습니까?')) return;
+  const getSeverityIcon = (severity) => {
+    const icons = {
+      success: '✅',
+      info: 'ℹ️',
+      warning: '⚠️',
+      error: '❌'
+    };
+    return icons[severity] || 'ℹ️';
+  };
 
-    try {
-      setGenerating(true);
-      setError('');
-      await reportAPI.generate(selectedInfant.infantId);
-      
-      // 보고서 생성 후 목록 새로고침
-      await loadReports();
-      
-      alert('✅ 보고서가 성공적으로 생성되었습니다!');
-    } catch (err) {
-      console.error('Error generating report:', err);
-      setError('보고서 생성에 실패했습니다. 다시 시도해주세요.');
-    } finally {
-      setGenerating(false);
+  const getSeverityColor = (severity) => {
+    const colors = {
+      success: '#e8f5e9',
+      info: '#e3f2fd',
+      warning: '#fff3e0',
+      error: '#ffebee'
+    };
+    return colors[severity] || '#f5f5f5';
+  };
+
+  const getSeverityBorderColor = (severity) => {
+    const colors = {
+      success: '#4caf50',
+      info: '#2196f3',
+      warning: '#ff9800',
+      error: '#f44336'
+    };
+    return colors[severity] || '#9e9e9e';
+  };
+
+  const getCryTypeEmoji = (cryType) => {
+    const emojis = {
+      belly_pain: '🤕',
+      cold_hot: '🌡️',
+      burping: '😮',
+      discomfort: '😣',
+      hungry: '🍼',
+      tired: '😴',
+      emotional: '🤗',
+      needs_attention: '👋'
+    };
+    return emojis[cryType] || '👶';
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds || seconds === 0) return '0초';
+    
+    if (seconds < 60) {
+      return `${Math.round(seconds)}초`;
+    } else if (seconds < 3600) {
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.round(seconds % 60);
+      return secs > 0 ? `${mins}분 ${secs}초` : `${mins}분`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.floor((seconds % 3600) / 60);
+      return mins > 0 ? `${hours}시간 ${mins}분` : `${hours}시간`;
     }
   };
 
-  if (loading) {
+  const getMostCommonCryType = (eventsList) => {
+    if (!eventsList || eventsList.length === 0) return '-';
+    
+    const counts = {};
+    eventsList.forEach(e => {
+      if (e.cryType) {
+        counts[e.cryType] = (counts[e.cryType] || 0) + 1;
+      }
+    });
+    
+    const entries = Object.entries(counts);
+    if (entries.length === 0) return '-';
+    
+    const max = entries.reduce((a, b) => (a[1] > b[1] ? a : b));
+    const labelMap = {
+      hungry: '배고픔',
+      tired: '졸림',
+      uncomfortable: '불편함',
+      pain: '통증',
+      emotional: '감정적',
+    };
+    return labelMap[max[0]] || max[0];
+  };
+
+  if (!selectedInfant?.infantId) {
     return (
       <div style={styles.container}>
-        <div style={styles.loading}>
-          <div style={styles.spinner}></div>
-          <p>로딩 중...</p>
+        <div style={styles.emptyState}>
+          <div style={styles.emptyIcon}>📊</div>
+          <h2 style={styles.emptyTitle}>아기를 선택해주세요</h2>
+          <p style={styles.emptyText}>리포트를 보려면 먼저 아기를 선택해야 합니다.</p>
         </div>
       </div>
     );
   }
 
+  const stats = report ? {
+    totalEvents: report.summary.totalEvents,
+    resolvedEvents: report.byCryType ? report.byCryType.reduce((sum, type) => sum + type.count, 0) : 0,
+    avgConfidence: 85, // 임시값
+    mostCommonType: report.byCryType && report.byCryType.length > 0 ? report.byCryType[0].label : '-',
+  } : null;
+
   return (
     <div style={styles.container}>
+      {/* 헤더 */}
       <div style={styles.header}>
         <div>
-          <h1 style={styles.title}>📝 AI 자동 보고서</h1>
-          <p style={styles.subtitle}>
-            {selectedInfant.name}의 울음 패턴과 육아 인사이트를 분석한 보고서
-          </p>
+          <h1 style={styles.title}>📊 울음 분석 리포트</h1>
+          <p style={styles.subtitle}>{selectedInfant.name}의 울음 패턴 종합 분석 보고서</p>
         </div>
+      </div>
+
+      {/* ✅ 탭 네비게이션 */}
+      <div style={styles.tabContainer}>
         <button
-          onClick={handleGenerateReport}
-          disabled={generating}
+          onClick={() => setActiveTab('summary')}
           style={{
-            ...styles.generateButton,
-            opacity: generating ? 0.6 : 1,
-            cursor: generating ? 'not-allowed' : 'pointer',
+            ...styles.tabButton,
+            ...(activeTab === 'summary' ? styles.tabButtonActive : {})
           }}
         >
-          {generating ? (
-            <>
-              <span style={styles.buttonSpinner}></span>
-              생성 중...
-            </>
-          ) : (
-            '🤖 새 보고서 생성'
-          )}
+          📈 요약 리포트
+        </button>
+        <button
+          onClick={() => setActiveTab('aiReport')}
+          style={{
+            ...styles.tabButton,
+            ...(activeTab === 'aiReport' ? styles.tabButtonActive : {})
+          }}
+        >
+          🤖 AI 상세 보고서
         </button>
       </div>
 
-      {error && (
-        <div style={styles.error}>
-          ⚠️ {error}
-          <button onClick={loadReports} style={styles.retryButton}>
-            다시 시도
+      {/* 날짜 선택 */}
+      <div style={styles.filterCard}>
+        <div style={styles.dateInputGroup}>
+          <div style={styles.dateInput}>
+            <label style={styles.dateLabel}>📅 시작일</label>
+            <input
+              type="date"
+              value={dateRange.startDate}
+              onChange={(e) => setDateRange({ ...dateRange, startDate: e.target.value })}
+              style={styles.dateField}
+            />
+          </div>
+          <div style={styles.dateSeparator}>~</div>
+          <div style={styles.dateInput}>
+            <label style={styles.dateLabel}>📅 종료일</label>
+            <input
+              type="date"
+              value={dateRange.endDate}
+              onChange={(e) => setDateRange({ ...dateRange, endDate: e.target.value })}
+              style={styles.dateField}
+            />
+          </div>
+          <button 
+            onClick={fetchReport} 
+            style={styles.searchButton} 
+            disabled={loading}
+          >
+            {loading ? '⏳ 조회 중...' : '🔍 리포트 생성'}
           </button>
         </div>
-      )}
-
-      {reports.length === 0 ? (
-        <div style={styles.emptyState}>
-          <div style={styles.emptyIcon}>📄</div>
-          <h3>아직 생성된 보고서가 없습니다</h3>
-          <p>위의 '새 보고서 생성' 버튼을 클릭하여 첫 보고서를 만들어보세요</p>
-          <div style={styles.emptyHint}>
-            <strong>💡 보고서에는 다음 내용이 포함됩니다:</strong>
-            <ul style={styles.hintList}>
-              <li>울음 패턴 분석</li>
-              <li>주요 울음 원인 통계</li>
-              <li>조치 효과 분석</li>
-              <li>육아 개선 제안</li>
-            </ul>
-          </div>
-        </div>
-      ) : (
-        <div style={styles.reportsGrid}>
-          {reports.map((report) => (
-            <ReportCard
-              key={report.reportId}
-              report={report}
-              expanded={expandedReport === report.reportId}
-              onToggle={() => 
-                setExpandedReport(
-                  expandedReport === report.reportId ? null : report.reportId
-                )
-              }
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// 보고서 카드 컴포넌트
-function ReportCard({ report, expanded, onToggle }) {
-  return (
-    <div style={styles.reportCard}>
-      {/* 보고서 헤더 */}
-      <div style={styles.reportHeader} onClick={onToggle}>
-        <div style={styles.reportHeaderLeft}>
-          <div style={styles.reportIcon}>📊</div>
-          <div style={styles.reportInfo}>
-            <div style={styles.reportTitle}>
-              {new Date(report.createdAt).toLocaleDateString('ko-KR', {
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-              })} 보고서
-            </div>
-            <div style={styles.reportDate}>
-              생성: {new Date(report.createdAt).toLocaleString('ko-KR')}
-            </div>
-          </div>
-        </div>
-        <button style={styles.expandButton}>
-          {expanded ? '▲ 접기' : '▼ 펼치기'}
-        </button>
       </div>
 
-      {/* 보고서 내용 */}
-      {expanded && (
-        <div style={styles.reportContent}>
-          <div style={styles.reportSummary}>
-            {report.summary || report.content || '보고서 내용이 없습니다.'}
-          </div>
+      {/* 에러 메시지 */}
+      {error && activeTab === 'summary' && (
+        <div style={styles.errorBox}>
+          ⚠️ {error}
+        </div>
+      )}
 
-          {/* 보고서 메타 정보 */}
-          {report.metadata && (
-            <div style={styles.metadata}>
-              <h4 style={styles.metadataTitle}>📈 주요 지표</h4>
-              <div style={styles.metadataGrid}>
-                {Object.entries(report.metadata).map(([key, value]) => (
-                  <div key={key} style={styles.metadataItem}>
-                    <span style={styles.metadataKey}>{formatMetadataKey(key)}:</span>
-                    <span style={styles.metadataValue}>{value}</span>
-                  </div>
-                ))}
-              </div>
+      {/* ✅ 탭별 콘텐츠 */}
+      {activeTab === 'summary' ? (
+        <>
+          {/* 로딩 */}
+          {loading && (
+            <div style={styles.loadingBox}>
+              <div style={styles.spinner}></div>
+              <p style={styles.loadingText}>데이터를 분석하고 있습니다...</p>
             </div>
           )}
-        </div>
+
+          {/* 리포트 내용 */}
+          {!loading && report && (
+            <>
+              {/* 전체 요약 섹션 */}
+              <div style={styles.section}>
+                <div style={styles.sectionHeader}>
+                  <h2 style={styles.sectionTitle}>📈 기간 요약</h2>
+                  <p style={styles.sectionSubtitle}>전체 울음 통계 한눈에 보기</p>
+                </div>
+                <div style={styles.summaryGrid}>
+                  <div style={styles.summaryCard}>
+                    <div style={styles.summaryIcon}>🔢</div>
+                    <div style={styles.summaryContent}>
+                      <div style={styles.summaryLabel}>총 울음 횟수</div>
+                      <div style={styles.summaryValue}>{report.summary.totalEvents}<span style={styles.summaryUnit}>회</span></div>
+                      <div style={styles.summaryDesc}>분석 기간 동안 발생한 전체 울음</div>
+                    </div>
+                  </div>
+                  <div style={styles.summaryCard}>
+                    <div style={styles.summaryIcon}>⏱️</div>
+                    <div style={styles.summaryContent}>
+                      <div style={styles.summaryLabel}>총 울음 시간</div>
+                      <div style={styles.summaryValue}>{report.summary.totalDurationFormatted}</div>
+                      <div style={styles.summaryDesc}>누적된 울음 지속 시간</div>
+                    </div>
+                  </div>
+                  <div style={styles.summaryCard}>
+                    <div style={styles.summaryIcon}>📊</div>
+                    <div style={styles.summaryContent}>
+                      <div style={styles.summaryLabel}>평균 울음 시간</div>
+                      <div style={styles.summaryValue}>{report.summary.avgDurationFormatted}</div>
+                      <div style={styles.summaryDesc}>한 번 울 때 평균 지속 시간</div>
+                    </div>
+                  </div>
+                  <div style={styles.summaryCard}>
+                    <div style={styles.summaryIcon}>⏰</div>
+                    <div style={styles.summaryContent}>
+                      <div style={styles.summaryLabel}>최대 울음 시간</div>
+                      <div style={styles.summaryValue}>{formatDuration(report.summary.maxDurationSeconds)}</div>
+                      <div style={styles.summaryDesc}>가장 오래 울었던 시간</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 울음 타입별 통계 */}
+              <div style={styles.section}>
+                <div style={styles.sectionHeader}>
+                  <h2 style={styles.sectionTitle}>🍼 울음 유형별 분석</h2>
+                  <p style={styles.sectionSubtitle}>어떤 이유로 가장 많이 울었을까요?</p>
+                </div>
+                <div style={styles.typeGrid}>
+                  {report.byCryType.map((type, index) => (
+                    <div key={index} style={styles.typeCard}>
+                      <div style={styles.typeHeader}>
+                        <span style={styles.typeEmoji}>{getCryTypeEmoji(type.cryType)}</span>
+                        <div style={styles.typeHeaderText}>
+                          <span style={styles.typeName}>{type.label}</span>
+                          <span style={styles.typeCount}>{type.count}회 발생</span>
+                        </div>
+                      </div>
+                      <div style={styles.typeStats}>
+                        <div style={styles.typeStat}>
+                          <span style={styles.typeStatLabel}>📊 전체 비율</span>
+                          <span style={styles.typeStatValue}>{type.percentage}%</span>
+                        </div>
+                        <div style={styles.typeStat}>
+                          <span style={styles.typeStatLabel}>⏱️ 평균 시간</span>
+                          <span style={styles.typeStatValue}>{type.avgDurationFormatted}</span>
+                        </div>
+                      </div>
+                      <div style={styles.typeBar}>
+                        <div 
+                          style={{
+                            ...styles.typeBarFill,
+                            width: `${type.percentage}%`,
+                            backgroundColor: index === 0 ? '#f44336' : index === 1 ? '#ff9800' : '#4caf50'
+                          }}
+                        >
+                          <span style={styles.typeBarLabel}>{type.percentage}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 시간대별 분석 */}
+              <div style={styles.section}>
+                <div style={styles.sectionHeader}>
+                  <h2 style={styles.sectionTitle}>🕐 시간대별 울음 분포</h2>
+                  <p style={styles.sectionSubtitle}>하루 중 어느 시간에 가장 많이 울었나요?</p>
+                </div>
+                <div style={styles.chartCard}>
+                  <div style={styles.hourChart}>
+                    {report.byHour.map((hour, index) => {
+                      const maxCount = Math.max(...report.byHour.map(h => h.count));
+                      const height = maxCount > 0 ? (hour.count / maxCount) * 100 : 0;
+                      
+                      return (
+                        <div key={index} style={styles.hourBar}>
+                          <div 
+                            style={{
+                              ...styles.hourBarFill,
+                              height: `${height}%`,
+                              backgroundColor: height > 70 ? '#f44336' : height > 40 ? '#ff9800' : '#4caf50'
+                            }}
+                            title={`${hour.hour}시: ${hour.count}회`}
+                          >
+                            {hour.count > 0 && (
+                              <span style={styles.hourBarLabel}>{hour.count}</span>
+                            )}
+                          </div>
+                          <div style={styles.hourLabel}>{hour.hour}시</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* 심각도별 통계 */}
+              {report.bySeverity && report.bySeverity.length > 0 && (
+                <div style={styles.section}>
+                  <div style={styles.sectionHeader}>
+                    <h2 style={styles.sectionTitle}>⚠️ 심각도별 분석</h2>
+                    <p style={styles.sectionSubtitle}>울음의 긴급도를 분류했습니다</p>
+                  </div>
+                  <div style={styles.severityGrid}>
+                    {report.bySeverity.map((sev, index) => (
+                      <div key={index} style={styles.severityCard}>
+                        <div style={styles.severityHeader}>
+                          <span style={{
+                            ...styles.severityBadge,
+                            backgroundColor: 
+                              sev.severity === 'High' ? '#f44336' :
+                              sev.severity === 'Medium' ? '#ff9800' : '#4caf50'
+                          }}>
+                            {sev.severity === 'High' ? '🔴 높음' : 
+                             sev.severity === 'Medium' ? '🟠 보통' : '🟢 낮음'}
+                          </span>
+                        </div>
+                        <div style={styles.severityStats}>
+                          <div style={styles.severityCount}>{sev.count}<span style={styles.severityUnit}>회</span></div>
+                          <div style={styles.severityPercentage}>전체의 {sev.percentage}%</div>
+                          <div style={styles.severityAvg}>평균 {formatDuration(sev.avgDurationSeconds)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 효과적인 조치 */}
+              {report.topActions && report.topActions.length > 0 && (
+                <div style={styles.section}>
+                  <div style={styles.sectionHeader}>
+                    <h2 style={styles.sectionTitle}>🎯 효과적인 조치 Top 5</h2>
+                    <p style={styles.sectionSubtitle}>가장 자주 시도하고 효과적이었던 방법들</p>
+                  </div>
+                  <div style={styles.actionsTable}>
+                    {report.topActions.map((action, index) => (
+                      <div key={index} style={styles.actionRow}>
+                        <div style={styles.actionRank}>
+                          <div style={styles.rankNumber}>{index + 1}</div>
+                          <div style={styles.rankLabel}>위</div>
+                        </div>
+                        <div style={styles.actionInfo}>
+                          <div style={styles.actionName}>{action.label}</div>
+                          <div style={styles.actionStats}>
+                            <span style={styles.actionCount}>📊 {action.count}회 사용</span>
+                            <span style={styles.actionDivider}>•</span>
+                            <span style={styles.actionEffectiveness}>
+                              ⭐ 효과도 {action.avgEffectiveness.toFixed(1)}/1.0
+                            </span>
+                          </div>
+                        </div>
+                        <div style={styles.actionScore}>
+                          <div style={styles.scoreBar}>
+                            <div 
+                              style={{
+                                ...styles.scoreBarFill,
+                                width: `${(action.avgEffectiveness) * 100}%`
+                              }}
+                            ></div>
+                          </div>
+                          <div style={styles.scoreText}>{(action.avgEffectiveness * 100).toFixed(0)}%</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      ) : (
+        // ✅ AI 상세 보고서 탭
+        <TextReport
+          infantId={selectedInfant.infantId}
+          startDate={dateRange.startDate}
+          endDate={dateRange.endDate}
+        />
       )}
     </div>
   );
-}
-
-// 메타데이터 키 포맷팅
-function formatMetadataKey(key) {
-  const keyMap = {
-    totalEvents: '전체 이벤트',
-    avgConfidence: '평균 신뢰도',
-    mostCommonCry: '가장 많은 울음',
-    successRate: '조치 성공률',
-  };
-  return keyMap[key] || key;
 }
 
 const styles = {
   container: {
-    maxWidth: '1000px',
+    maxWidth: '1400px',
     margin: '0 auto',
+    padding: '24px',
   },
   header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
     marginBottom: '32px',
-    gap: '20px',
   },
   title: {
-    fontSize: '32px',
-    margin: '0 0 8px 0',
-    color: '#333',
+    fontSize: '48px',
+    fontWeight: '800',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+    letterSpacing: '-1px',
   },
   subtitle: {
-    margin: 0,
+    fontSize: '22px',
     color: '#666',
-    fontSize: '16px',
+    margin: 0,
+    fontWeight: '500',
   },
-  generateButton: {
-    padding: '14px 24px',
+  // ✅ 탭 스타일
+  tabContainer: {
+    display: 'flex',
+    gap: '12px',
+    marginBottom: '24px',
+    borderBottom: '2px solid #e0e0e0',
+    paddingBottom: '0',
+  },
+  tabButton: {
+    padding: '16px 32px',
+    fontSize: '18px',
+    fontWeight: '600',
+    backgroundColor: 'transparent',
+    color: '#666',
+    border: 'none',
+    borderBottom: '3px solid transparent',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    marginBottom: '-2px',
+  },
+  tabButtonActive: {
+    color: '#1976d2',
+    borderBottomColor: '#1976d2',
+    fontWeight: '700',
+  },
+  emptyState: {
+    textAlign: 'center',
+    padding: '120px 20px',
+    backgroundColor: 'white',
+    borderRadius: '20px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  },
+  emptyIcon: {
+    fontSize: '100px',
+    marginBottom: '32px',
+  },
+  emptyTitle: {
+    fontSize: '36px',
+    margin: '0 0 20px 0',
+    color: '#333',
+    fontWeight: '700',
+  },
+  emptyText: {
+    fontSize: '20px',
+    color: '#666',
+  },
+  filterCard: {
+    backgroundColor: 'white',
+    borderRadius: '20px',
+    padding: '32px',
+    marginBottom: '32px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
+  },
+  dateInputGroup: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    gap: '20px',
+    flexWrap: 'wrap',
+  },
+  dateInput: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+  },
+  dateLabel: {
+    fontSize: '18px',
+    fontWeight: '700',
+    color: '#333',
+  },
+  dateField: {
+    padding: '14px 18px',
+    fontSize: '18px',
+    border: '2px solid #e0e0e0',
+    borderRadius: '12px',
+    outline: 'none',
+    transition: 'border-color 0.2s',
+  },
+  dateSeparator: {
+    fontSize: '24px',
+    fontWeight: '700',
+    color: '#999',
+    paddingBottom: '14px',
+  },
+  searchButton: {
+    padding: '14px 40px',
+    fontSize: '18px',
+    fontWeight: '700',
     backgroundColor: '#1976d2',
     color: 'white',
     border: 'none',
-    borderRadius: '10px',
-    fontSize: '16px',
-    fontWeight: '600',
+    borderRadius: '12px',
     cursor: 'pointer',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    whiteSpace: 'nowrap',
-    transition: 'background-color 0.2s',
+    transition: 'all 0.2s',
+    boxShadow: '0 4px 8px rgba(25, 118, 210, 0.3)',
   },
-  buttonSpinner: {
-    width: '16px',
-    height: '16px',
-    border: '2px solid #ffffff',
-    borderTop: '2px solid transparent',
-    borderRadius: '50%',
-    animation: 'spin 0.8s linear infinite',
+  errorBox: {
+    padding: '24px',
+    backgroundColor: '#ffebee',
+    color: '#c62828',
+    borderRadius: '16px',
+    fontSize: '18px',
+    marginBottom: '32px',
+    fontWeight: '600',
   },
-  loading: {
+  loadingBox: {
     textAlign: 'center',
-    padding: '60px 20px',
+    padding: '80px 20px',
+    backgroundColor: 'white',
+    borderRadius: '20px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
   },
   spinner: {
-    width: '50px',
-    height: '50px',
+    width: '60px',
+    height: '60px',
+    margin: '0 auto 24px',
     border: '5px solid #f3f3f3',
     borderTop: '5px solid #1976d2',
     borderRadius: '50%',
     animation: 'spin 1s linear infinite',
-    margin: '0 auto 20px',
   },
-  error: {
-    padding: '20px',
-    backgroundColor: '#ffebee',
-    color: '#c62828',
-    borderRadius: '12px',
-    marginBottom: '24px',
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  loadingText: {
+    fontSize: '22px',
+    color: '#333',
+    fontWeight: '600',
   },
-  retryButton: {
-    padding: '8px 16px',
-    backgroundColor: '#1976d2',
-    color: 'white',
-    border: 'none',
-    borderRadius: '6px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  emptyState: {
-    textAlign: 'center',
-    padding: '80px 40px',
+  section: {
     backgroundColor: 'white',
-    borderRadius: '16px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    borderRadius: '20px',
+    padding: '40px',
+    marginBottom: '32px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
   },
-  emptyIcon: {
-    fontSize: '64px',
-    marginBottom: '20px',
+  sectionHeader: {
+    marginBottom: '32px',
   },
-  emptyHint: {
-    marginTop: '32px',
-    padding: '24px',
-    backgroundColor: '#e3f2fd',
-    borderRadius: '12px',
-    textAlign: 'left',
+  sectionTitle: {
+    fontSize: '36px',
+    fontWeight: '800',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
   },
-  hintList: {
-    margin: '12px 0 0 0',
-    paddingLeft: '20px',
+  sectionSubtitle: {
+    fontSize: '18px',
+    color: '#666',
+    margin: 0,
   },
-  reportsGrid: {
+  summaryGrid: {
     display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+    gap: '24px',
+  },
+  summaryCard: {
+    display: 'flex',
+    alignItems: 'center',
     gap: '20px',
-  },
-  reportCard: {
-    backgroundColor: 'white',
+    padding: '32px',
+    backgroundColor: '#f8f9fa',
     borderRadius: '16px',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-    overflow: 'hidden',
-    transition: 'box-shadow 0.2s',
+    border: '2px solid #e9ecef',
   },
-  reportHeader: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '24px',
-    cursor: 'pointer',
-    transition: 'background-color 0.2s',
+  summaryIcon: {
+    fontSize: '56px',
   },
-  reportHeaderLeft: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '16px',
+  summaryContent: {
+    flex: 1,
   },
-  reportIcon: {
-    fontSize: '40px',
+  summaryLabel: {
+    fontSize: '16px',
+    color: '#666',
+    marginBottom: '8px',
+    fontWeight: '600',
   },
-  reportInfo: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: '4px',
+  summaryValue: {
+    fontSize: '36px',
+    fontWeight: '800',
+    color: '#1a1a1a',
+    marginBottom: '4px',
   },
-  reportTitle: {
+  summaryUnit: {
     fontSize: '20px',
     fontWeight: '600',
-    color: '#333',
+    color: '#999',
+    marginLeft: '4px',
   },
-  reportDate: {
+  summaryDesc: {
     fontSize: '14px',
     color: '#999',
   },
-  expandButton: {
-    padding: '8px 16px',
-    backgroundColor: '#f5f5f5',
-    border: 'none',
-    borderRadius: '8px',
-    cursor: 'pointer',
-    fontSize: '14px',
-    color: '#666',
-    transition: 'background-color 0.2s',
-  },
-  reportContent: {
-    padding: '0 24px 24px 24px',
-    borderTop: '1px solid #f0f0f0',
-  },
-  reportSummary: {
-    padding: '24px 0',
-    fontSize: '15px',
-    lineHeight: '1.8',
-    color: '#333',
-    whiteSpace: 'pre-wrap',
-  },
-  metadata: {
-    padding: '20px',
-    backgroundColor: '#f9f9f9',
-    borderRadius: '12px',
-  },
-  metadataTitle: {
-    margin: '0 0 16px 0',
-    fontSize: '16px',
-    color: '#333',
-  },
-  metadataGrid: {
+  typeGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-    gap: '12px',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: '24px',
   },
-  metadataItem: {
+  typeCard: {
+    padding: '32px',
+    backgroundColor: '#fafafa',
+    borderRadius: '16px',
+    border: '2px solid #e0e0e0',
+  },
+  typeHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    marginBottom: '24px',
+  },
+  typeEmoji: {
+    fontSize: '48px',
+  },
+  typeHeaderText: {
+    flex: 1,
+  },
+  typeName: {
+    display: 'block',
+    fontSize: '26px',
+    fontWeight: '700',
+    color: '#1a1a1a',
+  },
+  typeCount: {
+    display: 'block',
+    fontSize: '16px',
+    color: '#666',
+    marginTop: '4px',
+  },
+  typeStats: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: '16px',
+    marginBottom: '20px',
   },
-  metadataKey: {
+  typeStat: {
+    display: 'flex',
+    justifyContent: 'space-between',
+  },
+  typeStatLabel: {
+    fontSize: '17px',
+    color: '#666',
+    fontWeight: '600',
+  },
+  typeStatValue: {
+    fontSize: '20px',
+    fontWeight: '700',
+    color: '#1a1a1a',
+  },
+  typeBar: {
+    height: '16px',
+    backgroundColor: '#e0e0e0',
+    borderRadius: '8px',
+    overflow: 'hidden',
+  },
+  typeBarFill: {
+    height: '100%',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    paddingRight: '8px',
+  },
+  typeBarLabel: {
     fontSize: '13px',
+    fontWeight: '700',
+    color: 'white',
+  },
+  chartCard: {
+    padding: '32px',
+    backgroundColor: '#fafafa',
+    borderRadius: '16px',
+  },
+  hourChart: {
+    display: 'flex',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    height: '350px',
+    gap: '6px',
+  },
+  hourBar: {
+    flex: 1,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    height: '100%',
+  },
+  hourBarFill: {
+    width: '100%',
+    borderRadius: '6px 6px 0 0',
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    paddingTop: '6px',
+    marginTop: 'auto',
+    minHeight: '24px',
+  },
+  hourBarLabel: {
+    fontSize: '14px',
+    fontWeight: '700',
+    color: 'white',
+  },
+  hourLabel: {
+    fontSize: '15px',
+    color: '#666',
+    marginTop: '10px',
+    fontWeight: '600',
+  },
+  severityGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+    gap: '24px',
+  },
+  severityCard: {
+    padding: '32px',
+    backgroundColor: '#fafafa',
+    borderRadius: '16px',
+    textAlign: 'center',
+    border: '2px solid #e0e0e0',
+  },
+  severityHeader: {
+    marginBottom: '20px',
+  },
+  severityBadge: {
+    display: 'inline-block',
+    padding: '12px 28px',
+    borderRadius: '24px',
+    color: 'white',
+    fontSize: '18px',
+    fontWeight: '700',
+  },
+  severityStats: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  severityCount: {
+    fontSize: '42px',
+    fontWeight: '800',
+    color: '#1a1a1a',
+  },
+  severityUnit: {
+    fontSize: '24px',
+    fontWeight: '600',
+    color: '#999',
+    marginLeft: '4px',
+  },
+  severityPercentage: {
+    fontSize: '20px',
+    color: '#666',
+    fontWeight: '600',
+  },
+  severityAvg: {
+    fontSize: '17px',
+    color: '#999',
+  },
+  actionsTable: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  actionRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '24px',
+    padding: '28px',
+    backgroundColor: '#fafafa',
+    borderRadius: '16px',
+    border: '2px solid #e0e0e0',
+  },
+  actionRank: {
+    width: '64px',
+    height: '64px',
+    borderRadius: '50%',
+    backgroundColor: '#1976d2',
+    color: 'white',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  rankNumber: {
+    fontSize: '28px',
+    fontWeight: '800',
+    lineHeight: '1',
+  },
+  rankLabel: {
+    fontSize: '14px',
+    fontWeight: '600',
+  },
+  actionInfo: {
+    flex: 1,
+  },
+  actionName: {
+    fontSize: '22px',
+    fontWeight: '700',
+    color: '#1a1a1a',
+    marginBottom: '8px',
+  },
+  actionStats: {
+    fontSize: '17px',
     color: '#666',
   },
-  metadataValue: {
-    fontSize: '18px',
-    fontWeight: '600',
-    color: '#1976d2',
+  actionCount: {
+    marginRight: '8px',
+  },
+  actionDivider: {
+    margin: '0 12px',
+    color: '#ccc',
+  },
+  actionEffectiveness: {
+    marginLeft: '8px',
+  },
+  actionScore: {
+    width: '240px',
+    flexShrink: 0,
+  },
+  scoreBar: {
+    height: '28px',
+    backgroundColor: '#e0e0e0',
+    borderRadius: '14px',
+    overflow: 'hidden',
+    marginBottom: '8px',
+  },
+  scoreBarFill: {
+    height: '100%',
+    backgroundColor: '#4caf50',
+  },
+  scoreText: {
+    fontSize: '16px',
+    fontWeight: '700',
+    color: '#666',
+    textAlign: 'center',
   },
 };
 

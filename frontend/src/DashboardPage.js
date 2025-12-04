@@ -1,23 +1,79 @@
-// src/DashboardPage.js (음악 자동재생 기능 추가)
-import React, { useState, useEffect } from 'react';
+// src/DashboardPage.js (전체 코드 - 자동재생 한 번만 수정)
+import React, { useState, useEffect, useRef } from 'react';
 import { dashboardAPI, actionAPI } from './api';
 import { useAuth } from './AuthContext';
 import MusicPlayer from './MusicPlayer';
 
 function DashboardPage() {
+  console.log('🚀🚀🚀 DashboardPage 컴포넌트 렌더링됨! 🚀🚀🚀');
+  
   const { selectedInfant } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  
+  const [showMusicPlayer, setShowMusicPlayer] = useState(false);
+  const [currentMusicType, setCurrentMusicType] = useState(null);
+  
+  // ✅ 자동재생을 한 번만 하도록 추적
+  const hasAutoPlayedRef = useRef(false);
+
+  // ✅ 디버깅: selectedInfant 확인
+  useEffect(() => {
+    console.log('🔍 [Dashboard] selectedInfant:', selectedInfant);
+  }, [selectedInfant]);
+
+  // ✅ 디버깅: events 확인
+  useEffect(() => {
+    console.log('🔍 [Dashboard] events:', events);
+    console.log('🔍 [Dashboard] events.length:', events.length);
+  }, [events]);
 
   useEffect(() => {
     if (selectedInfant?.infantId) {
+      console.log('✅ [Dashboard] infantId 확인됨, loadDashboard 호출');
       loadDashboard();
+    } else {
+      console.log('⚠️ [Dashboard] infantId 없음:', selectedInfant);
     }
   }, [selectedInfant?.infantId]);
 
+  // ✅ 자동재생 로직 - 한 번만 실행
+  useEffect(() => {
+    if (events.length === 0) {
+      console.log('ℹ️ [Dashboard] events가 비어있음, 자동재생 건너뜀');
+      return;
+    }
+    
+    // 이미 자동재생을 시도했다면 건너뜀
+    if (hasAutoPlayedRef.current) {
+      console.log('ℹ️ [Dashboard] 이미 자동재생 시도함, 건너뜀');
+      return;
+    }
+    
+    const musicPlayableEvent = events.find(
+      e => e.isResolved !== 'Y' && ['tired', 'emotional'].includes(e.cryType)
+    );
+    
+    console.log('🔍 [Dashboard] 음악 재생 가능한 이벤트:', musicPlayableEvent);
+    
+    if (musicPlayableEvent) {
+      const timer = setTimeout(() => {
+        console.log('🎵 [Dashboard] 음악 자동재생 시작 (한 번만)');
+        setCurrentMusicType(musicPlayableEvent.cryType);
+        setShowMusicPlayer(true);
+        hasAutoPlayedRef.current = true; // 자동재생 완료 표시
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [events]); // showMusicPlayer 의존성 제거!
+
   const loadDashboard = async () => {
+    console.log('📡 [Dashboard] loadDashboard 시작');
+    
     if (!selectedInfant?.infantId) {
+      console.log('❌ [Dashboard] infantId 없음');
       setError('아기 정보를 선택해주세요.');
       setLoading(false);
       return;
@@ -27,19 +83,22 @@ function DashboardPage() {
       setLoading(true);
       setError('');
       
-      console.log('Loading dashboard for infant:', selectedInfant.infantId);
+      console.log('📤 [Dashboard] API 호출 시작, infantId:', selectedInfant.infantId);
       const response = await dashboardAPI.getEvents(selectedInfant.infantId);
       
-      console.log('Dashboard response:', response.data);
-      setEvents(response.data.events || []);
+      console.log('📥 [Dashboard] API 응답 전체:', response);
+      console.log('📥 [Dashboard] response.data:', response.data);
+      console.log('📥 [Dashboard] response.data.events:', response.data.events);
+      
+      const eventsData = response.data.events || [];
+      console.log('✅ [Dashboard] 설정할 events:', eventsData);
+      
+      setEvents(eventsData);
     } catch (err) {
-      console.error('Error loading dashboard:', err);
-      console.error('Error details:', {
-        message: err.message,
-        response: err.response?.data,
-        status: err.response?.status,
-        config: err.config
-      });
+      console.error('❌ [Dashboard] API 오류:', err);
+      console.error('❌ [Dashboard] err.response:', err.response);
+      console.error('❌ [Dashboard] err.response?.data:', err.response?.data);
+      console.error('❌ [Dashboard] err.response?.status:', err.response?.status);
       
       let errorMessage = '대시보드를 불러오는데 실패했습니다.';
       
@@ -62,14 +121,28 @@ function DashboardPage() {
         errorMessage = `오류: ${err.message}`;
       }
       
+      console.log('❌ [Dashboard] 최종 에러 메시지:', errorMessage);
       setError(errorMessage);
     } finally {
       setLoading(false);
+      console.log('🏁 [Dashboard] loadDashboard 완료');
     }
   };
 
   const handleActionSaved = () => {
+    console.log('💾 [Dashboard] 조치 저장됨, 새로고침');
     loadDashboard();
+  };
+
+  const handlePlayMusic = (cryType) => {
+    console.log('🎵 [Dashboard] 음악 재생 요청:', cryType);
+    setCurrentMusicType(cryType);
+    setShowMusicPlayer(true);
+  };
+
+  const handleCloseMusicPlayer = () => {
+    console.log('🎵 [Dashboard] 음악 플레이어 닫기');
+    setShowMusicPlayer(false);
   };
 
   const getCryTypeLabel = (cryType) => {
@@ -83,15 +156,20 @@ function DashboardPage() {
     return labelMap[cryType] || cryType;
   };
 
-  const getMostCommonCryType = (events) => {
-    if (events.length === 0) return '-';
+  const getMostCommonCryType = (eventsList) => {
+    if (!eventsList || eventsList.length === 0) return '-';
+    
     const counts = {};
-    events.forEach(e => {
-      counts[e.cryType] = (counts[e.cryType] || 0) + 1;
+    eventsList.forEach(e => {
+      if (e.cryType) {
+        counts[e.cryType] = (counts[e.cryType] || 0) + 1;
+      }
     });
+    
     const entries = Object.entries(counts);
     if (entries.length === 0) return '-';
-    const max = entries.reduce((a, b) => a[1] > b[1] ? a : b);
+    
+    const max = entries.reduce((a, b) => (a[1] > b[1] ? a : b));
     return getCryTypeLabel(max[0]);
   };
 
@@ -104,7 +182,10 @@ function DashboardPage() {
     mostCommonType: getMostCommonCryType(events),
   };
 
+  console.log('🔍 [Dashboard] 렌더링 상태:', { loading, error, eventsCount: events.length, stats });
+
   if (loading) {
+    console.log('⏳ [Dashboard] 로딩 중 표시');
     return (
       <div style={styles.container}>
         <div style={styles.loading}>
@@ -116,6 +197,7 @@ function DashboardPage() {
   }
 
   if (error) {
+    console.log('❌ [Dashboard] 에러 표시:', error);
     return (
       <div style={styles.container}>
         <div style={styles.error}>
@@ -128,6 +210,8 @@ function DashboardPage() {
     );
   }
 
+  console.log('✅ [Dashboard] 정상 렌더링, events.length:', events.length);
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
@@ -135,6 +219,22 @@ function DashboardPage() {
         <p style={styles.subtitle}>
           {selectedInfant?.name || '아기'}의 울음 분석 결과와 조치 기록
         </p>
+      </div>
+
+      {/* ✅ 디버깅: 현재 상태 표시 */}
+      <div style={{ 
+        padding: '16px', 
+        backgroundColor: '#e3f2fd', 
+        borderRadius: '8px', 
+        marginBottom: '24px',
+        fontSize: '14px',
+        fontFamily: 'monospace'
+      }}>
+        <div>🔍 디버그 정보:</div>
+        <div>- infantId: {selectedInfant?.infantId || 'null'}</div>
+        <div>- events.length: {events.length}</div>
+        <div>- loading: {loading.toString()}</div>
+        <div>- error: {error || 'null'}</div>
       </div>
 
       {events.length > 0 && (
@@ -167,6 +267,22 @@ function DashboardPage() {
           <div style={styles.emptyIcon}>📭</div>
           <h3>아직 울음 이벤트가 없습니다</h3>
           <p>울음 업로드 페이지에서 아기의 울음을 분석해보세요</p>
+          <button 
+            onClick={loadDashboard} 
+            style={{
+              marginTop: '16px',
+              padding: '12px 24px',
+              backgroundColor: '#1976d2',
+              color: 'white',
+              border: 'none',
+              borderRadius: '8px',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: '600',
+            }}
+          >
+            🔄 새로고침
+          </button>
         </div>
       ) : (
         <div style={styles.eventsGrid}>
@@ -175,35 +291,27 @@ function DashboardPage() {
               key={event.eventId}
               event={event}
               onActionSaved={handleActionSaved}
+              onPlayMusic={handlePlayMusic}
             />
           ))}
         </div>
+      )}
+
+      {showMusicPlayer && currentMusicType && (
+        <MusicPlayer
+          cryType={currentMusicType}
+          onClose={handleCloseMusicPlayer}
+        />
       )}
     </div>
   );
 }
 
-// 이벤트 카드 컴포넌트 (자동재생 기능 추가)
-function EventCard({ event, onActionSaved }) {
+// ✅ EventCard 컴포넌트
+function EventCard({ event, onActionSaved, onPlayMusic }) {
   const [showActionForm, setShowActionForm] = useState(false);
-  const [showMusicPlayer, setShowMusicPlayer] = useState(false);
-  const [hasAutoPlayed, setHasAutoPlayed] = useState(false);
 
-  // 음악 재생 가능한 타입인지 확인
   const canPlayMusic = ['tired', 'emotional'].includes(event.cryType);
-
-  // 자동재생 로직: 컴포넌트 마운트 시 음악 재생 가능한 타입이면 자동으로 플레이어 열기
-  useEffect(() => {
-    if (canPlayMusic && !hasAutoPlayed && !event.isResolved) {
-      // 약간의 지연 후 자동재생 (UX 개선)
-      const timer = setTimeout(() => {
-        setShowMusicPlayer(true);
-        setHasAutoPlayed(true);
-      }, 500);
-      
-      return () => clearTimeout(timer);
-    }
-  }, [canPlayMusic, hasAutoPlayed, event.isResolved]);
 
   const getCryTypeEmoji = (cryType) => {
     const emojiMap = {
@@ -249,7 +357,6 @@ function EventCard({ event, onActionSaved }) {
 
   return (
     <div style={styles.eventCard}>
-      {/* 이벤트 헤더 */}
       <div style={styles.eventHeader}>
         <div style={styles.eventType}>
           <span style={styles.eventEmoji}>{getCryTypeEmoji(event.cryType)}</span>
@@ -268,34 +375,25 @@ function EventCard({ event, onActionSaved }) {
         </div>
       </div>
 
-      {/* 시간 */}
       <div style={styles.eventTime}>
         {new Date(event.eventTime).toLocaleString('ko-KR')}
       </div>
 
-      {/* 울음 타입 설명 */}
       <div style={styles.cryDescription}>
         {getCryTypeDescription(event.cryType)}
       </div>
 
-      {/* 음악 재생 섹션 (자동재생 알림 추가) */}
       {canPlayMusic && (
         <div style={styles.musicSection}>
           <button
-            onClick={() => setShowMusicPlayer(true)}
+            onClick={() => onPlayMusic(event.cryType)}
             style={styles.musicButton}
           >
             🎵 진정 음악 재생
           </button>
-          {showMusicPlayer && (
-            <div style={styles.autoplayNotice}>
-              ✨ 진정 음악이 자동으로 재생됩니다
-            </div>
-          )}
         </div>
       )}
 
-      {/* GPT 추천 조치 */}
       {event.notification && (
         <div style={styles.recommendation}>
           <div style={styles.recommendationHeader}>
@@ -308,7 +406,6 @@ function EventCard({ event, onActionSaved }) {
         </div>
       )}
 
-      {/* 보호자 조치 목록 */}
       {event.actions && event.actions.length > 0 && (
         <div style={styles.actionsSection}>
           <div style={styles.actionsSectionHeader}>
@@ -325,7 +422,6 @@ function EventCard({ event, onActionSaved }) {
         </div>
       )}
 
-      {/* 조치 추가 버튼 */}
       <div style={styles.cardFooter}>
         {!showActionForm ? (
           <button
@@ -345,15 +441,6 @@ function EventCard({ event, onActionSaved }) {
           />
         )}
       </div>
-
-      {/* 음악 플레이어 모달 (자동재생) */}
-      {showMusicPlayer && (
-        <MusicPlayer
-          cryType={event.cryType}
-          onClose={() => setShowMusicPlayer(false)}
-          autoPlay={true}
-        />
-      )}
     </div>
   );
 }
@@ -688,16 +775,6 @@ const styles = {
     fontSize: '15px',
     fontWeight: '600',
     transition: 'background-color 0.2s',
-  },
-  autoplayNotice: {
-    marginTop: '12px',
-    padding: '10px',
-    backgroundColor: '#fff',
-    borderRadius: '6px',
-    fontSize: '13px',
-    color: '#7b1fa2',
-    textAlign: 'center',
-    fontWeight: '500',
   },
   recommendation: {
     backgroundColor: '#e3f2fd',

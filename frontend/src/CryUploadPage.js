@@ -1,5 +1,5 @@
-// src/CryUploadPage.js (울음 타입 텍스트 설명 + 오디오 미리듣기 기능 추가)
-import React, { useState, useRef } from 'react';
+// src/CryUploadPage.js (울음 타입 텍스트 설명 + 오디오 미리듣기 + 마이크 녹음 기능 + WAV 변환 + 정규화)
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { cryAPI } from './api';
 import { useAuth } from './AuthContext';
@@ -12,17 +12,218 @@ function CryUploadPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   
-  // ✅ 오디오 재생 관련 state 추가
+  // ✅ 오디오 재생 관련 state
   const [audioUrl, setAudioUrl] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const audioRef = useRef(null);
 
+  // ✅ 녹음 관련 state
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  const [recordedChunks, setRecordedChunks] = useState([]);
+  const [recordMode, setRecordMode] = useState(false);
+  const recordingIntervalRef = useRef(null);
+
+  // ✅ WebM을 WAV로 변환하는 함수
+  const audioBufferToWav = (buffer) => {
+    const length = buffer.length * buffer.numberOfChannels * 2 + 44;
+    const arrayBuffer = new ArrayBuffer(length);
+    const view = new DataView(arrayBuffer);
+    const channels = [];
+    let offset = 0;
+    let pos = 0;
+
+    const setUint16 = (data) => {
+      view.setUint16(pos, data, true);
+      pos += 2;
+    };
+    const setUint32 = (data) => {
+      view.setUint32(pos, data, true);
+      pos += 4;
+    };
+
+    // RIFF identifier
+    setUint32(0x46464952);
+    // file length
+    setUint32(length - 8);
+    // RIFF type
+    setUint32(0x45564157);
+    // format chunk identifier
+    setUint32(0x20746d66);
+    // format chunk length
+    setUint32(16);
+    // sample format (raw)
+    setUint16(1);
+    // channel count
+    setUint16(buffer.numberOfChannels);
+    // sample rate
+    setUint32(buffer.sampleRate);
+    // byte rate
+    setUint32(buffer.sampleRate * 2 * buffer.numberOfChannels);
+    // block align
+    setUint16(buffer.numberOfChannels * 2);
+    // bits per sample
+    setUint16(16);
+    // data chunk identifier
+    setUint32(0x61746164);
+    // data chunk length
+    setUint32(length - pos - 4);
+
+    for (let i = 0; i < buffer.numberOfChannels; i++) {
+      channels.push(buffer.getChannelData(i));
+    }
+
+    while (pos < length) {
+      for (let i = 0; i < buffer.numberOfChannels; i++) {
+        let sample = Math.max(-1, Math.min(1, channels[i][offset]));
+        sample = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
+        view.setInt16(pos, sample, true);
+        pos += 2;
+      }
+      offset++;
+    }
+
+    return new Blob([arrayBuffer], { type: 'audio/wav' });
+  };
+
+  const convertToWav = async (blob) => {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const arrayBuffer = await blob.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    
+    const wavBlob = audioBufferToWav(audioBuffer);
+    return wavBlob;
+  };
+
+  // ✅ 마이크 권한 요청 및 녹음 시작 (정규화된 설정)
+  const startRecording = async () => {
+    try {
+      // ✅ 수정: 신호 처리 비활성화, 샘플레이트 22050으로 통일
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: false,      // ✅ 변경: 에코 제거 비활성화
+          noiseSuppression: false,       // ✅ 변경: 노이즈 제거 비활성화
+          autoGainControl: false,        // ✅ 추가: 자동 게인 제어 비활성화
+          sampleRate: 22050,             // ✅ 변경: 모델과 동일한 샘플레이트
+        } 
+      });
+
+      // ✅ 수정: 비트레이트 명시
+      const recorder = new MediaRecorder(stream, {
+        mimeType: 'audio/webm',
+        audioBitsPerSecond: 128000,      // ✅ 추가: 비트레이트 명시
+      });
+
+      const chunks = [];
+
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          chunks.push(e.data);
+        }
+      };
+
+      recorder.onstop = async () => {
+        const blob = new Blob(chunks, { type: 'audio/webm' });
+        
+        try {
+          console.log('🔄 WebM을 WAV로 변환 중...');
+          const wavBlob = await convertToWav(blob);
+          
+          const audioFile = new File([wavBlob], `recording_${Date.now()}.wav`, {
+            type: 'audio/wav',
+          });
+
+          console.log('✅ WAV 변환 성공:', audioFile.name, audioFile.size);
+          setFile(audioFile);
+          
+          const url = URL.createObjectURL(wavBlob);
+          setAudioUrl(url);
+        } catch (convertError) {
+          console.error('❌ WAV 변환 오류:', convertError);
+          
+          console.log('⚠️ WebM 형식 그대로 사용');
+          const audioFile = new File([blob], `recording_${Date.now()}.webm`, {
+            type: 'audio/webm',
+          });
+
+          setFile(audioFile);
+          
+          const url = URL.createObjectURL(blob);
+          setAudioUrl(url);
+        }
+
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      recorder.start();
+      setMediaRecorder(recorder);
+      setIsRecording(true);
+      setRecordingTime(0);
+      setRecordedChunks(chunks);
+
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+
+    } catch (err) {
+      console.error('❌ 마이크 권한 오류:', err);
+      if (err.name === 'NotAllowedError') {
+        setError('마이크 권한이 거부되었습니다. 브라우저 설정에서 마이크 권한을 허용해주세요.');
+      } else if (err.name === 'NotFoundError') {
+        setError('마이크를 찾을 수 없습니다. 마이크가 연결되어 있는지 확인해주세요.');
+      } else {
+        setError('녹음을 시작할 수 없습니다: ' + err.message);
+      }
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      mediaRecorder.stop();
+      setIsRecording(false);
+      
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+    }
+  };
+
+  const cancelRecording = () => {
+    if (mediaRecorder) {
+      if (mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stop();
+      }
+      
+      mediaRecorder.stream.getTracks().forEach(track => track.stop());
+    }
+    
+    setIsRecording(false);
+    setRecordingTime(0);
+    setRecordedChunks([]);
+    
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (recordingIntervalRef.current) {
+        clearInterval(recordingIntervalRef.current);
+      }
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        mediaRecorder.stream.getTracks().forEach(track => track.stop());
+      }
+      cleanupAudio();
+    };
+  }, [mediaRecorder]);
+
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
-      // 파일 타입 검증
       const validTypes = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/x-wav'];
       if (!validTypes.includes(selectedFile.type) && !selectedFile.name.match(/\.(wav|mp3)$/i)) {
         setError('WAV 또는 MP3 파일만 업로드 가능합니다.');
@@ -31,7 +232,6 @@ function CryUploadPage() {
         return;
       }
 
-      // 파일 크기 검증 (10MB)
       if (selectedFile.size > 10 * 1024 * 1024) {
         setError('파일 크기는 10MB 이하여야 합니다.');
         setFile(null);
@@ -43,7 +243,6 @@ function CryUploadPage() {
       setError('');
       setResult(null);
       
-      // ✅ 오디오 미리듣기를 위한 URL 생성
       const url = URL.createObjectURL(selectedFile);
       setAudioUrl(url);
       setIsPlaying(false);
@@ -52,7 +251,6 @@ function CryUploadPage() {
     }
   };
 
-  // ✅ 오디오 정리 함수
   const cleanupAudio = () => {
     if (audioUrl) {
       URL.revokeObjectURL(audioUrl);
@@ -63,7 +261,6 @@ function CryUploadPage() {
     setDuration(0);
   };
 
-  // ✅ 재생/일시정지 토글
   const togglePlayPause = () => {
     if (!audioRef.current) return;
 
@@ -76,7 +273,6 @@ function CryUploadPage() {
     }
   };
 
-  // ✅ 오디오 이벤트 핸들러
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
@@ -94,7 +290,6 @@ function CryUploadPage() {
     setCurrentTime(0);
   };
 
-  // ✅ 진행바 클릭으로 재생 위치 변경
   const handleSeek = (e) => {
     if (!audioRef.current || !duration) return;
 
@@ -107,7 +302,6 @@ function CryUploadPage() {
     setCurrentTime(newTime);
   };
 
-  // ✅ 시간 포맷 함수 (초 → MM:SS)
   const formatTime = (seconds) => {
     if (!seconds || isNaN(seconds)) return '0:00';
     const mins = Math.floor(seconds / 60);
@@ -121,7 +315,6 @@ function CryUploadPage() {
       return;
     }
 
-    // ✅ 검증 추가: selectedInfant와 user 확인
     if (!selectedInfant || !selectedInfant.infantId) {
       setError('아기 정보를 불러올 수 없습니다. 아기를 선택해주세요.');
       return;
@@ -140,19 +333,17 @@ function CryUploadPage() {
       const formData = new FormData();
       formData.append('audio', file);
 
-      // ✅ infantId와 guardianId를 숫자로 변환하여 전달
       const infantId = parseInt(selectedInfant.infantId);
       const guardianId = parseInt(user.guardianId);
 
-      // 디버깅용 로그
       console.log('📤 업로드 정보:', {
         infantId,
         guardianId,
         fileName: file.name,
-        fileSize: file.size
+        fileSize: file.size,
+        fileType: file.type
       });
 
-      // ✅ NaN 체크
       if (isNaN(infantId) || isNaN(guardianId)) {
         throw new Error(`잘못된 ID 값입니다. infantId: ${infantId}, guardianId: ${guardianId}`);
       }
@@ -166,27 +357,22 @@ function CryUploadPage() {
       console.log('✅ 업로드 성공:', response.data);
       setResult(response.data);
       
-      // ✅ 업로드 성공 후 파일 및 오디오 초기화
       setFile(null);
       cleanupAudio();
     } catch (err) {
       console.error('❌ Upload error:', err);
       
-      // 에러 메시지 처리
       let errorMessage = '업로드에 실패했습니다. 다시 시도해주세요.';
       
       if (err.response?.data?.detail) {
         const detail = err.response.data.detail;
         
-        // detail이 배열인 경우 (FastAPI validation error)
         if (Array.isArray(detail)) {
           errorMessage = detail.map(e => e.msg).join(', ');
         } 
-        // detail이 문자열인 경우
         else if (typeof detail === 'string') {
           errorMessage = detail;
         }
-        // detail이 객체인 경우
         else if (typeof detail === 'object') {
           errorMessage = JSON.stringify(detail);
         }
@@ -207,6 +393,10 @@ function CryUploadPage() {
       uncomfortable: '😣',
       pain: '😭',
       emotional: '🤗',
+      belly_pain: '😭',
+      discomfort: '😣',
+      burping: '🤱',
+      cold_hot: '🌡️',
     };
     return emojiMap[cryType] || '👶';
   };
@@ -218,11 +408,14 @@ function CryUploadPage() {
       uncomfortable: '불편함',
       pain: '통증',
       emotional: '감정적',
+      belly_pain: '배앓이',
+      discomfort: '불편함',
+      burping: '트림 필요',
+      cold_hot: '온도 불편',
     };
     return labelMap[cryType] || cryType;
   };
 
-  // ✅ 울음 타입별 상세 설명 추가
   const getCryTypeDescription = (cryType) => {
     const descriptionMap = {
       hungry: '아기가 배고픔을 느끼고 있습니다. 마지막 수유 시간을 확인하고 분유나 모유를 제공해주세요.',
@@ -230,11 +423,14 @@ function CryUploadPage() {
       uncomfortable: '아기가 불편함을 느끼고 있습니다. 기저귀 상태, 옷의 착용감, 실내 온도를 확인해주세요.',
       pain: '아기가 통증을 느끼고 있을 수 있습니다. 배앓이, 가스, 또는 다른 불편함이 있는지 확인하고, 필요시 소아과 상담을 권장합니다.',
       emotional: '아기가 감정적으로 위로가 필요합니다. 안아주고 부드럽게 말을 걸어주거나, 진정 음악을 들려주세요.',
+      belly_pain: '아기가 배앓이를 겪고 있습니다. 배를 부드럽게 마사지하고, 증상이 심하면 소아과 상담을 권장합니다.',
+      discomfort: '아기가 불편함을 느끼고 있습니다. 전반적인 상태를 확인해주세요.',
+      burping: '아기가 트림이 필요합니다. 등을 두드려 트림을 시켜주세요.',
+      cold_hot: '아기가 온도로 인한 불편함을 느끼고 있습니다. 실내 온도와 옷을 확인해주세요.',
     };
     return descriptionMap[cryType] || '아기의 울음 원인을 파악하고 적절한 조치를 취해주세요.';
   };
 
-  // ✅ 울음 타입별 추천 조치 추가
   const getCryTypeActions = (cryType) => {
     const actionsMap = {
       hungry: [
@@ -267,6 +463,26 @@ function CryUploadPage() {
         '진정 음악 재생',
         '스킨십 늘리기'
       ],
+      belly_pain: [
+        '배를 시계방향으로 부드럽게 마사지',
+        '따뜻한 수건 배에 대주기',
+        '세워서 안아주기',
+        '증상이 심하면 소아과 상담'
+      ],
+      discomfort: [
+        '전반적인 불편 요소 점검',
+        '자세 바꿔주기',
+        '안아서 달래주기'
+      ],
+      burping: [
+        '등을 두드려 트림 시키기',
+        '세워서 안아주기',
+        '배 마사지'
+      ],
+      cold_hot: [
+        '체온 및 실내온도 확인 (20-22°C)',
+        '옷 두께 조절하기'
+      ],
     };
     return actionsMap[cryType] || ['아기를 관찰하고 필요한 조치를 취해주세요.'];
   };
@@ -280,7 +496,6 @@ function CryUploadPage() {
     return colorMap[severity] || '#757575';
   };
 
-  // ✅ 아기 선택 안내 메시지
   if (!selectedInfant || !selectedInfant.infantId) {
     return (
       <div style={styles.container}>
@@ -310,48 +525,134 @@ function CryUploadPage() {
       <div style={styles.header}>
         <h1 style={styles.title}>📤 울음 소리 업로드</h1>
         <p style={styles.subtitle}>
-          {selectedInfant.name}의 울음 소리를 녹음하여 업로드하세요
+          {selectedInfant.name}의 울음 소리를 녹음하거나 업로드하세요
         </p>
       </div>
 
       <div style={styles.uploadCard}>
-        {/* 파일 선택 영역 */}
-        <div style={styles.uploadArea}>
-          <label htmlFor="file-input" style={styles.fileLabel}>
-            <div style={styles.fileLabelContent}>
-              <div style={styles.uploadIcon}>🎵</div>
-              <div style={styles.uploadText}>
-                {file ? (
-                  <>
-                    <div style={styles.fileName}>{file.name}</div>
-                    <div style={styles.fileSize}>
-                      {(file.size / 1024).toFixed(2)} KB
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div style={styles.uploadPrompt}>
-                      파일을 선택하거나 여기에 드래그하세요
-                    </div>
-                    <div style={styles.uploadHint}>
-                      WAV 또는 MP3 파일, 최대 10MB
-                    </div>
-                  </>
-                )}
-              </div>
-            </div>
-          </label>
-          <input
-            id="file-input"
-            type="file"
-            accept="audio/wav,audio/mp3,audio/mpeg,.wav,.mp3"
-            onChange={handleFileChange}
-            style={styles.fileInput}
-            disabled={uploading}
-          />
+        <div style={styles.modeSelector}>
+          <button
+            style={{
+              ...styles.modeButton,
+              ...(!recordMode ? styles.modeButtonActive : {})
+            }}
+            onClick={() => {
+              if (isRecording) {
+                cancelRecording();
+              }
+              setRecordMode(false);
+              setError('');
+            }}
+            disabled={uploading || isRecording}
+          >
+            🎵 파일 업로드
+          </button>
+          <button
+            style={{
+              ...styles.modeButton,
+              ...(recordMode ? styles.modeButtonActive : {})
+            }}
+            onClick={() => {
+              setRecordMode(true);
+              setFile(null);
+              cleanupAudio();
+              setError('');
+            }}
+            disabled={uploading || isRecording}
+          >
+            🎙️ 직접 녹음
+          </button>
         </div>
 
-        {/* ✅ 오디오 플레이어 */}
+        {recordMode && (
+          <>
+            {!isRecording && !file && (
+              <div style={styles.recordingArea}>
+                <div style={styles.recordIcon}>🎙️</div>
+                <div style={styles.recordPrompt}>
+                  버튼을 눌러 아기 울음소리 녹음을 시작하세요
+                </div>
+                <button
+                  onClick={startRecording}
+                  style={styles.startRecordButton}
+                  disabled={uploading}
+                >
+                  🔴 녹음 시작
+                </button>
+                <div style={styles.recordHint}>
+                  최소 3초 이상 녹음하는 것을 권장합니다
+                </div>
+              </div>
+            )}
+
+            {isRecording && (
+              <div style={styles.recordingActive}>
+                <div style={styles.recordingIndicator}>
+                  <span style={styles.recordingDot}></span>
+                  녹음 중...
+                </div>
+                <div style={styles.recordingTimer}>
+                  {formatTime(recordingTime)}
+                </div>
+                <div style={styles.recordingControls}>
+                  <button
+                    onClick={stopRecording}
+                    style={styles.stopRecordButton}
+                  >
+                    ⏹️ 녹음 완료
+                  </button>
+                  <button
+                    onClick={cancelRecording}
+                    style={styles.cancelRecordButton}
+                  >
+                    ❌ 취소
+                  </button>
+                </div>
+                <div style={styles.recordingWave}>
+                  🎵 🎵 🎵 🎵 🎵
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {!recordMode && (
+          <div style={styles.uploadArea}>
+            <label htmlFor="file-input" style={styles.fileLabel}>
+              <div style={styles.fileLabelContent}>
+                <div style={styles.uploadIcon}>🎵</div>
+                <div style={styles.uploadText}>
+                  {file ? (
+                    <>
+                      <div style={styles.fileName}>{file.name}</div>
+                      <div style={styles.fileSize}>
+                        {(file.size / 1024).toFixed(2)} KB
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={styles.uploadPrompt}>
+                        파일을 선택하거나 여기에 드래그하세요
+                      </div>
+                      <div style={styles.uploadHint}>
+                        WAV 또는 MP3 파일, 최대 10MB
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </label>
+            <input
+              id="file-input"
+              type="file"
+              accept="audio/wav,audio/mp3,audio/mpeg,.wav,.mp3"
+              onChange={handleFileChange}
+              style={styles.fileInput}
+              disabled={uploading}
+            />
+          </div>
+        )}
+
         {audioUrl && (
           <div style={styles.audioPlayer}>
             <audio
@@ -367,7 +668,6 @@ function CryUploadPage() {
             </div>
 
             <div style={styles.playerControls}>
-              {/* 재생/일시정지 버튼 */}
               <button
                 onClick={togglePlayPause}
                 style={styles.playButton}
@@ -376,7 +676,6 @@ function CryUploadPage() {
                 {isPlaying ? '⏸️' : '▶️'}
               </button>
 
-              {/* 진행바 */}
               <div style={styles.progressContainer}>
                 <div
                   style={styles.progressBar}
@@ -398,14 +697,12 @@ function CryUploadPage() {
           </div>
         )}
 
-        {/* 에러 메시지 */}
         {error && (
           <div style={styles.error}>
             ⚠️ {error}
           </div>
         )}
 
-        {/* 업로드 버튼 */}
         <button
           onClick={handleUpload}
           disabled={!file || uploading}
@@ -426,7 +723,6 @@ function CryUploadPage() {
         </button>
       </div>
 
-      {/* 분석 결과 */}
       {result && (
         <div style={styles.resultCard}>
           <div style={styles.resultHeader}>
@@ -434,7 +730,6 @@ function CryUploadPage() {
           </div>
 
           <div style={styles.resultContent}>
-            {/* 울음 타입 */}
             <div style={styles.resultMain}>
               <div style={styles.resultEmoji}>
                 {getCryTypeEmoji(result.prediction)}
@@ -442,13 +737,11 @@ function CryUploadPage() {
               <div style={styles.resultType}>
                 {getCryTypeLabel(result.prediction)}
               </div>
-              {/* ✅ 울음 타입 설명 추가 */}
               <div style={styles.resultDescription}>
                 {getCryTypeDescription(result.prediction)}
               </div>
             </div>
 
-            {/* 상세 정보 */}
             <div style={styles.resultDetails}>
               <div style={styles.resultDetail}>
                 <span style={styles.detailLabel}>심각도:</span>
@@ -476,7 +769,6 @@ function CryUploadPage() {
               </div>
             </div>
 
-            {/* ✅ 추천 조치 목록 추가 */}
             <div style={styles.recommendedActions}>
               <div style={styles.recommendedActionsHeader}>
                 💡 추천 조치 사항
@@ -490,7 +782,29 @@ function CryUploadPage() {
               </ul>
             </div>
 
-            {/* 조치 안내 */}
+            {/* ✅ 디버그 정보 추가 */}
+            {result.probabilities && (
+              <div style={styles.debugInfo}>
+                <div style={styles.debugHeader}>🔍 디버그 정보</div>
+                <div style={styles.debugContent}>
+                  <div style={styles.debugItem}>
+                    <span style={styles.debugLabel}>모델 버전:</span>
+                    <span style={styles.debugValue}>{result.model_version || 'v15.1'}</span>
+                  </div>
+                  <div style={styles.debugItem}>
+                    <span style={styles.debugLabel}>분석 단계:</span>
+                    <span style={styles.debugValue}>{result.probabilities.stage || result.stage || 'unknown'}</span>
+                  </div>
+                  <div style={styles.debugItem}>
+                    <span style={styles.debugLabel}>확률 분포:</span>
+                    <pre style={styles.debugPre}>
+                      {JSON.stringify(result.probabilities, null, 2)}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div style={styles.actionGuide}>
               <div style={styles.actionGuideHeader}>
                 📊 다음 단계
@@ -509,7 +823,6 @@ function CryUploadPage() {
         </div>
       )}
 
-      {/* 사용 팁 */}
       <div style={styles.tipsCard}>
         <h3 style={styles.tipsTitle}>📌 사용 팁</h3>
         <ul style={styles.tipsList}>
@@ -589,6 +902,129 @@ const styles = {
     boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
     marginBottom: '24px',
   },
+  modeSelector: {
+    display: 'flex',
+    gap: '8px',
+    marginBottom: '24px',
+    padding: '4px',
+    backgroundColor: '#f5f5f5',
+    borderRadius: '12px',
+  },
+  modeButton: {
+    flex: 1,
+    padding: '12px',
+    backgroundColor: 'transparent',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#666',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+  },
+  modeButtonActive: {
+    backgroundColor: 'white',
+    color: '#1976d2',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+  },
+  recordingArea: {
+    padding: '60px 20px',
+    textAlign: 'center',
+    backgroundColor: '#fafafa',
+    borderRadius: '12px',
+    border: '2px dashed #ccc',
+    marginBottom: '24px',
+  },
+  recordIcon: {
+    fontSize: '64px',
+    marginBottom: '16px',
+  },
+  recordPrompt: {
+    fontSize: '18px',
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: '24px',
+  },
+  startRecordButton: {
+    padding: '16px 32px',
+    backgroundColor: '#f44336',
+    color: 'white',
+    border: 'none',
+    borderRadius: '24px',
+    fontSize: '16px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+    marginBottom: '16px',
+  },
+  recordHint: {
+    fontSize: '14px',
+    color: '#999',
+  },
+  recordingActive: {
+    padding: '40px 20px',
+    textAlign: 'center',
+    backgroundColor: '#fff3e0',
+    borderRadius: '12px',
+    border: '2px solid #ff9800',
+    marginBottom: '24px',
+  },
+  recordingIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px',
+    fontSize: '18px',
+    fontWeight: '600',
+    color: '#f44336',
+    marginBottom: '16px',
+  },
+  recordingDot: {
+    width: '12px',
+    height: '12px',
+    borderRadius: '50%',
+    backgroundColor: '#f44336',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  recordingTimer: {
+    fontSize: '48px',
+    fontWeight: '700',
+    color: '#333',
+    marginBottom: '24px',
+    fontFamily: 'monospace',
+  },
+  recordingControls: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'center',
+    marginBottom: '24px',
+  },
+  stopRecordButton: {
+    padding: '12px 24px',
+    backgroundColor: '#4caf50',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+  },
+  cancelRecordButton: {
+    padding: '12px 24px',
+    backgroundColor: '#757575',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'background-color 0.2s',
+  },
+  recordingWave: {
+    fontSize: '24px',
+    animation: 'wave 1s ease-in-out infinite',
+  },
   uploadArea: {
     marginBottom: '24px',
   },
@@ -637,7 +1073,6 @@ const styles = {
   fileInput: {
     display: 'none',
   },
-  // ✅ 오디오 플레이어 스타일
   audioPlayer: {
     marginBottom: '24px',
     padding: '20px',
@@ -840,6 +1275,49 @@ const styles = {
     color: '#333',
     lineHeight: '2',
     marginBottom: '4px',
+  },
+  // ✅ 디버그 정보 스타일 추가
+  debugInfo: {
+    padding: '20px',
+    backgroundColor: '#f5f5f5',
+    borderRadius: '12px',
+    border: '1px solid #ddd',
+  },
+  debugHeader: {
+    fontSize: '16px',
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: '12px',
+  },
+  debugContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '12px',
+  },
+  debugItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '4px',
+  },
+  debugLabel: {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#888',
+  },
+  debugValue: {
+    fontSize: '14px',
+    color: '#333',
+  },
+  debugPre: {
+    fontSize: '12px',
+    color: '#333',
+    backgroundColor: 'white',
+    padding: '12px',
+    borderRadius: '6px',
+    overflow: 'auto',
+    maxHeight: '200px',
+    fontFamily: 'monospace',
+    margin: 0,
   },
   actionGuide: {
     padding: '20px',

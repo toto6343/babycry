@@ -1,6 +1,10 @@
 """
 API Blueprint - 핵심 울음 분석 엔드포인트 및 FastAPI 라우트 호환 모듈
 app.py의 메인 기능을 보완하는 레거시 호환 라우트와 최신 FastAPI 라우트를 포함합니다.
+
+✅ 수정 사항 (2024):
+- upload_audio에 상세한 오디오 메타정보 로깅 추가
+- 업로드 파일과 녹음 파일의 차이 분석을 위한 디버깅 정보 강화
 """
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
@@ -10,6 +14,7 @@ import os
 from datetime import datetime
 import json
 import librosa
+import numpy as np  # ✅ 추가: RMS 계산을 위해 필요
 import time
 import traceback
 import requests
@@ -233,6 +238,10 @@ async def upload_audio(
 ):
     """
     FastAPI 기반 오디오 업로드 및 분석 엔드포인트
+    
+    ✅ 수정 사항:
+    - 상세한 오디오 메타정보 로깅 추가
+    - 업로드/녹음 파일 차이 분석을 위한 디버깅 정보 강화
     """
     dest = None
     try:
@@ -259,6 +268,21 @@ async def upload_audio(
         
         print(f"✅ 파일 저장 완료: {dest}")
         
+        # ✅ 추가: 오디오 메타정보 로깅 (업로드/녹음 차이 분석용)
+        try:
+            audio_data, sample_rate = librosa.load(str(dest), sr=None)
+            duration_sec = len(audio_data) / sample_rate
+            rms_energy = np.sqrt(np.mean(audio_data**2))
+            
+            print(f"📊 오디오 정보:")
+            print(f"   - 원본 샘플레이트: {sample_rate} Hz")
+            print(f"   - 길이: {duration_sec:.2f}초")
+            print(f"   - RMS 에너지: {rms_energy:.6f}")
+            print(f"   - 파일 타입: {audio.content_type}")
+            
+        except Exception as meta_err:
+            print(f"⚠️ 메타정보 추출 실패: {meta_err}")
+        
         # 모델 예측
         classifier = get_classifier()
         classifier.set_sensitivity(sensitivity)
@@ -273,7 +297,7 @@ async def upload_audio(
         
         print(f"✅ 예측 완료: {prediction} (신뢰도: {confidence:.2f}, 심각도: {severity})")
         
-        # 메타정보 추출
+        # 메타정보 추출 (응답용)
         try:
             audio_data, sample_rate = librosa.load(str(dest), sr=None)
             duration_ms = int(len(audio_data) / sample_rate * 1000)

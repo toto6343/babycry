@@ -1,17 +1,19 @@
-// src/MusicPlayer.js
-import React, { useRef, useEffect } from 'react';
+// src/MusicPlayer.js (개선 버전)
+import React, { useRef, useEffect, useState } from 'react';
 
 function MusicPlayer({ cryType, onClose }) {
   const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playPromiseRef = useRef(null);
 
   const musicMap = {
     tired: {
-      file: '/music/lullaby-tired.mp3', // ✅ .mp3로 변경
+      file: '/music/lullaby-tired.mp3',
       title: '자장가 - 아기 수면 음악',
       emoji: '😴',
     },
     emotional: {
-      file: '/music/lullaby-emotional.mp3', // ✅ .mp3로 변경
+      file: '/music/lullaby-emotional.mp3',
       title: '자장가 - 어쿠스틱 기타',
       emoji: '🤗',
     },
@@ -20,33 +22,68 @@ function MusicPlayer({ cryType, onClose }) {
   const music = musicMap[cryType];
 
   useEffect(() => {
-    if (audioRef.current && music) {
-      // 자동 재생 시도
-      audioRef.current.play().catch(err => {
-        console.log('자동 재생 실패 (사용자 상호작용 필요):', err);
-      });
-    }
+    if (!music || !audioRef.current) return;
 
-    return () => {
-      // 컴포넌트 언마운트 시 음악 정지
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.currentTime = 0;
+    const tryAutoPlay = async () => {
+      try {
+        playPromiseRef.current = audioRef.current.play();
+        await playPromiseRef.current;
+        setIsPlaying(true);
+        console.log('✅ 자동 재생 성공');
+      } catch (err) {
+        if (err.name === 'NotAllowedError') {
+          console.log('ℹ️ 자동 재생이 차단되었습니다. 재생 버튼을 눌러주세요.');
+        } else if (err.name !== 'AbortError') {
+          console.log('자동 재생 실패:', err.message);
+        }
+        setIsPlaying(false);
       }
     };
-  }, [music]);
+
+    tryAutoPlay();
+
+    return () => {
+      const cleanup = async () => {
+        if (playPromiseRef.current) {
+          try {
+            await playPromiseRef.current;
+          } catch (err) {
+            // play가 실패했어도 cleanup은 진행
+          }
+        }
+        
+        if (audioRef.current) {
+          audioRef.current.pause();
+          audioRef.current.currentTime = 0;
+        }
+      };
+      
+      cleanup();
+    };
+  }, [cryType]);
 
   if (!music) {
     return null;
   }
 
-  const handlePlayPause = () => {
-    if (audioRef.current) {
+  const handlePlayPause = async () => {
+    if (!audioRef.current) return;
+
+    try {
       if (audioRef.current.paused) {
-        audioRef.current.play();
+        playPromiseRef.current = audioRef.current.play();
+        await playPromiseRef.current;
+        setIsPlaying(true);
       } else {
+        if (playPromiseRef.current) {
+          await playPromiseRef.current;
+        }
         audioRef.current.pause();
+        setIsPlaying(false);
       }
+    } catch (err) {
+      console.error('재생/일시정지 오류:', err);
+      setIsPlaying(false);
     }
   };
 
@@ -61,6 +98,12 @@ function MusicPlayer({ cryType, onClose }) {
           <div style={styles.musicIcon}>{music.emoji}</div>
           <h3 style={styles.musicTitle}>{music.title}</h3>
 
+          {!isPlaying && (
+            <div style={styles.autoplayNotice}>
+              ℹ️ 자동 재생이 차단된 경우 아래 버튼을 눌러주세요
+            </div>
+          )}
+
           <div style={styles.audioContainer}>
             <audio
               ref={audioRef}
@@ -68,6 +111,8 @@ function MusicPlayer({ cryType, onClose }) {
               loop
               controls
               style={styles.audioPlayer}
+              onPlay={() => setIsPlaying(true)}
+              onPause={() => setIsPlaying(false)}
             >
               브라우저가 오디오를 지원하지 않습니다.
             </audio>
@@ -79,10 +124,13 @@ function MusicPlayer({ cryType, onClose }) {
 
           <div style={styles.controls}>
             <button 
-              style={styles.controlButton} 
+              style={{
+                ...styles.controlButton,
+                backgroundColor: isPlaying ? '#f44336' : '#4caf50'
+              }} 
               onClick={handlePlayPause}
             >
-              재생/일시정지
+              {isPlaying ? '⏸️ 일시정지' : '▶️ 재생'}
             </button>
             <button 
               style={{...styles.controlButton, backgroundColor: '#666'}} 
@@ -150,6 +198,15 @@ const styles = {
     color: '#333',
     textAlign: 'center',
   },
+  autoplayNotice: {
+    fontSize: '13px',
+    color: '#1976d2',
+    textAlign: 'center',
+    padding: '8px 16px',
+    backgroundColor: '#e3f2fd',
+    borderRadius: '8px',
+    width: '100%',
+  },
   audioContainer: {
     width: '100%',
     padding: '20px',
@@ -178,7 +235,6 @@ const styles = {
   },
   controlButton: {
     padding: '12px 32px',
-    backgroundColor: '#9c27b0',
     color: 'white',
     border: 'none',
     borderRadius: '12px',
