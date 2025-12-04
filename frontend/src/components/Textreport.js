@@ -1,6 +1,10 @@
-// src/components/Textreport.js (차트 제거 버전)
+// src/components/Textreport.js (Recharts 적용)
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import {
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+} from 'recharts';
 
 const TextReport = ({ infantId, startDate, endDate }) => {
   const [reportData, setReportData] = useState(null);
@@ -75,6 +79,40 @@ const TextReport = ({ infantId, startDate, endDate }) => {
     return '📝';
   };
 
+  // 차트 데이터 준비 (예시 - 실제 데이터로 교체 필요)
+  const prepareChartData = () => {
+    if (!reportData) return { dailyData: [], categoryData: [], severityData: [] };
+
+    // 1. 일별 울음 횟수 (예시)
+    const dailyData = [
+      { date: '월', count: 8, avgDuration: 5.2 },
+      { date: '화', count: 6, avgDuration: 4.8 },
+      { date: '수', count: 10, avgDuration: 6.1 },
+      { date: '목', count: 7, avgDuration: 5.5 },
+      { date: '금', count: 9, avgDuration: 5.8 },
+      { date: '토', count: 5, avgDuration: 4.5 },
+      { date: '일', count: 4, avgDuration: 4.2 },
+    ];
+
+    // 2. 카테고리별 분포 (예시)
+    const categoryData = [
+      { name: '배고픔', value: 35, color: '#667eea' },
+      { name: '졸림', value: 25, color: '#764ba2' },
+      { name: '불편함', value: 20, color: '#f093fb' },
+      { name: '통증', value: 15, color: '#4facfe' },
+      { name: '기타', value: 5, color: '#43e97b' },
+    ];
+
+    // 3. 심각도별 분포 (예시)
+    const severityData = [
+      { name: '낮음', value: 40 },
+      { name: '중간', value: 45 },
+      { name: '높음', value: 15 },
+    ];
+
+    return { dailyData, categoryData, severityData };
+  };
+
   if (loading) {
     return (
       <div style={styles.container}>
@@ -114,6 +152,7 @@ const TextReport = ({ infantId, startDate, endDate }) => {
   }
 
   const sections = parseReportText(reportData.reportText);
+  const { dailyData, categoryData, severityData } = prepareChartData();
 
   return (
     <div style={styles.container}>
@@ -174,6 +213,79 @@ const TextReport = ({ infantId, startDate, endDate }) => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* 차트 섹션 1: 일별 울음 추이 */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>
+            <span style={styles.sectionIcon}>📈</span>
+            일별 울음 추이
+          </h2>
+          <ResponsiveContainer width="100%" height={350}>
+            <LineChart data={dailyData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" style={{ fontSize: '16px' }} />
+              <YAxis style={{ fontSize: '16px' }} />
+              <Tooltip contentStyle={{ fontSize: '16px' }} />
+              <Legend wrapperStyle={{ fontSize: '16px' }} />
+              <Line 
+                type="monotone" 
+                dataKey="count" 
+                stroke="#667eea" 
+                strokeWidth={3}
+                name="울음 횟수"
+                dot={{ r: 5 }}
+              />
+              <Line 
+                type="monotone" 
+                dataKey="avgDuration" 
+                stroke="#764ba2" 
+                strokeWidth={3}
+                name="평균 지속시간(분)"
+                dot={{ r: 5 }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 차트 섹션 2: 카테고리별 분포 */}
+        <div style={styles.section}>
+          <h2 style={styles.sectionTitle}>
+            <span style={styles.sectionIcon}>🥧</span>
+            울음 원인 분포
+          </h2>
+          <div style={styles.chartRow}>
+            <ResponsiveContainer width="50%" height={350}>
+              <PieChart>
+                <Pie
+                  data={categoryData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={100}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {categoryData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip contentStyle={{ fontSize: '16px' }} />
+              </PieChart>
+            </ResponsiveContainer>
+            
+            <ResponsiveContainer width="50%" height={350}>
+              <BarChart data={severityData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" style={{ fontSize: '16px' }} />
+                <YAxis style={{ fontSize: '16px' }} />
+                <Tooltip contentStyle={{ fontSize: '16px' }} />
+                <Legend wrapperStyle={{ fontSize: '16px' }} />
+                <Bar dataKey="value" fill="#667eea" name="발생 횟수" />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         </div>
 
@@ -262,7 +374,7 @@ const styles = {
     animation: 'spin 1s linear infinite',
   },
   loadingSubtext: {
-    fontSize: '16px', // ✅ 14px → 16px
+    fontSize: '16px',
     color: '#999',
     marginTop: '8px',
   },
@@ -272,7 +384,7 @@ const styles = {
     color: '#c62828',
     borderRadius: '16px',
     textAlign: 'center',
-    fontSize: '18px', // ✅ 추가
+    fontSize: '18px',
   },
   retryButton: {
     marginTop: '16px',
@@ -282,7 +394,7 @@ const styles = {
     border: 'none',
     borderRadius: '8px',
     cursor: 'pointer',
-    fontSize: '18px', // ✅ 16px → 18px
+    fontSize: '18px',
     fontWeight: '600',
   },
   wrapper: {
@@ -303,18 +415,18 @@ const styles = {
     padding: '8px 20px',
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: '20px',
-    fontSize: '16px', // ✅ 14px → 16px
+    fontSize: '16px',
     fontWeight: '600',
     marginBottom: '32px',
   },
   coverTitle: {
-    fontSize: '56px', // ✅ 48px → 56px
+    fontSize: '56px',
     fontWeight: '800',
     lineHeight: '1.2',
     marginBottom: '24px',
   },
   coverPeriod: {
-    fontSize: '26px', // ✅ 24px → 26px
+    fontSize: '26px',
     marginBottom: '40px',
   },
   coverMeta: {
@@ -322,12 +434,12 @@ const styles = {
     gap: '40px',
   },
   metaLabel: {
-    fontSize: '16px', // ✅ 14px → 16px
+    fontSize: '16px',
     opacity: 0.8,
     marginBottom: '4px',
   },
   metaValue: {
-    fontSize: '20px', // ✅ 18px → 20px
+    fontSize: '20px',
     fontWeight: '700',
   },
   section: {
@@ -337,7 +449,7 @@ const styles = {
     borderRadius: '12px',
   },
   sectionTitle: {
-    fontSize: '32px', // ✅ 28px → 32px
+    fontSize: '32px',
     fontWeight: '700',
     color: '#1a1a1a',
     marginBottom: '24px',
@@ -346,15 +458,20 @@ const styles = {
     gap: '12px',
   },
   sectionIcon: {
-    fontSize: '36px', // ✅ 32px → 36px
+    fontSize: '36px',
   },
   sectionContent: {
-    lineHeight: '1.9', // ✅ 1.8 → 1.9 (줄간격도 살짝 증가)
+    lineHeight: '1.9',
   },
   paragraph: {
-    fontSize: '25px', // ✅ 16px → 19px (본문 - 가장 중요!)
+    fontSize: '25px',
     color: '#333',
-    marginBottom: '18px', // ✅ 16px → 18px
+    marginBottom: '18px',
+  },
+  chartRow: {
+    display: 'flex',
+    gap: '20px',
+    alignItems: 'center',
   },
   kpiGrid: {
     display: 'grid',
@@ -371,15 +488,15 @@ const styles = {
     boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
   },
   kpiIcon: {
-    fontSize: '48px', // ✅ 40px → 48px
+    fontSize: '48px',
   },
   kpiLabel: {
-    fontSize: '16px', // ✅ 14px → 16px
+    fontSize: '16px',
     color: '#666',
     marginBottom: '8px',
   },
   kpiValue: {
-    fontSize: '28px', // ✅ 24px → 28px
+    fontSize: '28px',
     fontWeight: '700',
     color: '#667eea',
   },
@@ -396,15 +513,15 @@ const styles = {
     borderRadius: '12px',
   },
   actionRank: {
-    width: '44px', // ✅ 40px → 44px
-    height: '44px', // ✅ 40px → 44px
+    width: '44px',
+    height: '44px',
     backgroundColor: '#667eea',
     color: 'white',
     borderRadius: '50%',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '20px', // ✅ 18px → 20px
+    fontSize: '20px',
     fontWeight: '800',
     flexShrink: 0,
   },
@@ -412,12 +529,12 @@ const styles = {
     flex: 1,
   },
   actionName: {
-    fontSize: '20px', // ✅ 18px → 20px
+    fontSize: '20px',
     fontWeight: '700',
     marginBottom: '8px',
   },
   actionStats: {
-    fontSize: '16px', // ✅ 14px → 16px
+    fontSize: '16px',
     color: '#666',
     display: 'flex',
     flexDirection: 'column',
@@ -429,17 +546,17 @@ const styles = {
     backgroundColor: '#f5f5f5',
     borderRadius: '12px',
     textAlign: 'center',
-    fontSize: '15px', // ✅ 추가
+    fontSize: '15px',
   },
   footerLogo: {
-    fontSize: '32px', // ✅ 28px → 32px
+    fontSize: '32px',
     fontWeight: '800',
     color: '#667eea',
     marginBottom: '16px',
   },
   disclaimer: {
-    fontSize: '14px', // ✅ 12px → 14px
-    color: '#666', // ✅ #999 → #666 (색도 진하게)
+    fontSize: '14px',
+    color: '#666',
     marginTop: '16px',
     padding: '12px',
     backgroundColor: '#fff3cd',
@@ -453,7 +570,7 @@ const styles = {
   },
   refreshButton: {
     padding: '14px 28px',
-    fontSize: '18px', // ✅ 16px → 18px
+    fontSize: '18px',
     fontWeight: '600',
     backgroundColor: '#667eea',
     color: 'white',
@@ -463,7 +580,7 @@ const styles = {
   },
   printButton: {
     padding: '14px 28px',
-    fontSize: '18px', // ✅ 16px → 18px
+    fontSize: '18px',
     fontWeight: '600',
     backgroundColor: '#4caf50',
     color: 'white',
@@ -472,5 +589,15 @@ const styles = {
     cursor: 'pointer',
   },
 };
+
+// 스피너 애니메이션
+const styleSheet = document.createElement("style");
+styleSheet.textContent = `
+  @keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
+`;
+document.head.appendChild(styleSheet);
 
 export default TextReport;
