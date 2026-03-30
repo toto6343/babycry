@@ -1,10 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';  // ✅ 추가
+import { BrowserRouter } from 'react-router-dom';
 import './index.css';
 import App from './App';
 import reportWebVitals from './reportWebVitals';
 import axios from 'axios';
+import * as serviceWorkerRegistration from './serviceWorkerRegistration';
 
 // ✅ axios 인터셉터
 axios.interceptors.request.use(
@@ -12,9 +13,7 @@ axios.interceptors.request.use(
     const token = localStorage.getItem('token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      console.log('🔐 axios 인터셉터: 토큰 추가됨');
     }
-    console.log('📍 요청 URL:', config.url);
     return config;
   },
   (error) => {
@@ -38,10 +37,13 @@ axios.interceptors.response.use(
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <React.StrictMode>
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <App />
     </BrowserRouter>
   </React.StrictMode>
 );
+
+// ✅ PWA 등록 (오프라인 캐싱 및 백그라운드 푸시 준비)
+serviceWorkerRegistration.register();
 
 reportWebVitals();

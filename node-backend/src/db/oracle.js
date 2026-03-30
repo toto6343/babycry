@@ -40,6 +40,28 @@ export async function getConnection() {
   return pool.getConnection();
 }
 
+/**
+ * ✅ 안전한 DB 실행 래퍼 (Connection Leak 방지)
+ * @param {Function} callback - (conn) => Promise<any>
+ */
+export async function withConnection(callback) {
+  let conn;
+  try {
+    conn = await getConnection();
+    return await callback(conn);
+  } catch (err) {
+    throw err;
+  } finally {
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (closeErr) {
+        console.error('⚠️ DB Connection close error:', closeErr);
+      }
+    }
+  }
+}
+
 export async function closePool() {
   if (pool) {
     await pool.close(0);

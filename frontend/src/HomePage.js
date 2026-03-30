@@ -40,7 +40,7 @@ function HomePage() {
 
   const quickStats = [
     {
-      icon: '👶',
+      icon: '',
       label: '등록된 아기',
       value: selectedInfant ? selectedInfant.name : '선택 필요',
       color: '#e91e63',

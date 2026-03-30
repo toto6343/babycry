@@ -74,15 +74,27 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
   const bestActions = await getBestActionGroupsForCause(cause, { minTrials: 2 });
   const actionText = await createActionText(cause, infantName, severity, bestActions);
 
-  // 3. 문자 내용 만들기
-  const smsBody = buildSmsBody({
+  // 3. 문자/푸시 내용 만들기
+  const notificationBody = buildSmsBody({
     infantName,
     isCrying: true,
     cause,
     actionText,
   });
 
-  // 4. SMS 전송
+  // ✅ 3.0 고도화: FCM 푸시 알림 전송 (비용 절감 및 실시간성 강화)
+  // SMS 전송 전에 앱 사용자(FCM 토큰이 있는 사용자)에게 우선적으로 무료 푸시 알림을 발송합니다.
+  let pushStatus = 'skipped';
+  try {
+    const fcmResult = await sendFcmPush(guardianId, "아기 울음 감지 🚨", notificationBody);
+    pushStatus = fcmResult.success ? 'sent' : 'failed';
+    console.log(`📱 FCM 푸시 전송 시도 결과: ${pushStatus}`);
+  } catch (fcmErr) {
+    console.error("📱 FCM 푸시 전송 오류:", fcmErr);
+    pushStatus = 'error';
+  }
+
+  // 4. SMS 전송 (푸시 실패 시 또는 SMS 선호 설정 시)
   const normalizedPhone = normalizeKoreanPhone(guardianPhone);
 
   // 보호자 전화번호가 없으면 SMS는 건너뛰고 로그만 남김
@@ -92,8 +104,8 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
     await saveNotificationLog({
       eventId: cryEventId,
       guardianId,
-      channel: 'sms',
-      status: 'no_phone',
+      channel: pushStatus === 'sent' ? 'push' : 'none',
+      status: pushStatus === 'sent' ? 'sent' : 'no_phone',
       providerMsgId: null,
       latencyMs: 0,
       actionText,
@@ -104,25 +116,31 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
 
   const start = Date.now();
   let sendResult;
-  let smsStatus = 'failed';
+  let smsStatus = 'skipped';
   let providerId = null;
 
-  try {
-    sendResult = await sendSms({ to: normalizedPhone, body: smsBody });
-    smsStatus = sendResult.success ? 'sent' : 'failed';
-    providerId = sendResult.messageId;
-  } catch (smsError) {
-    console.error('❌ SMS 전송 실패:', smsError.message);
-    
-    // Twilio 에러 코드별 처리
-    if (smsError.code === 21608) {
-      console.warn('⚠️ Twilio Trial 계정: 인증되지 않은 번호입니다.');
-      smsStatus = 'unverified_number';
-    } else if (smsError.code === 21211) {
-      console.warn('⚠️ 잘못된 전화번호 형식입니다.');
-      smsStatus = 'invalid_number';
-    } else {
-      smsStatus = 'error';
+  // 푸시가 성공했더라도 SMS를 보낼지(notification_pref 설정에 따라 다름) 결정할 수 있습니다.
+  // 여기서는 푸시 성공 시 SMS 생략(비용 절감) 로직을 적용해 봅니다.
+  if (pushStatus === 'sent') {
+    console.log("✅ FCM 푸시 발송 성공으로 SMS 발송은 생략합니다. (비용 절감)");
+  } else {
+    try {
+      sendResult = await sendSms({ to: normalizedPhone, body: notificationBody });
+      smsStatus = sendResult.success ? 'sent' : 'failed';
+      providerId = sendResult.messageId;
+    } catch (smsError) {
+      console.error('❌ SMS 전송 실패:', smsError.message);
+      
+      // Twilio 에러 코드별 처리
+      if (smsError.code === 21608) {
+        console.warn('⚠️ Twilio Trial 계정: 인증되지 않은 번호입니다.');
+        smsStatus = 'unverified_number';
+      } else if (smsError.code === 21211) {
+        console.warn('⚠️ 잘못된 전화번호 형식입니다.');
+        smsStatus = 'invalid_number';
+      } else {
+        smsStatus = 'error';
+      }
     }
   }
 
@@ -132,14 +150,79 @@ export async function sendNotificationForEvent({ cryEventId, infantId, cause, se
   await saveNotificationLog({
     eventId: cryEventId,
     guardianId,
-    channel: 'sms',
-    status: smsStatus,
+    channel: pushStatus === 'sent' ? 'push' : 'sms',
+    status: pushStatus === 'sent' ? pushStatus : smsStatus,
     providerMsgId: providerId,
     latencyMs,
     actionText,
   });
 
-  console.log(`📊 알림 로그 저장 완료: status=${smsStatus}`);
+  // ✅ 2번 고도화: 심각도가 High인 경우 의사에게도 긴급 알림 전송
+  if (severity === 'High') {
+    await notifyDoctorIfHighSeverity({ infantId, infantName, cause, cryEventId });
+  }
+
+  console.log(`📊 알림 로그 저장 완료: FCM=${pushStatus}, SMS=${smsStatus}`);
+}
+
+/**
+ * ✅ 3.0 고도화: Firebase Cloud Messaging 푸시 알림 전송
+ * DB에서 guardian의 fcm_token을 조회하여 모바일 앱이나 PWA로 무료 푸시를 보냅니다.
+ */
+async function sendFcmPush(guardianId, title, body) {
+  // 실제 구현 시: 
+  // 1. firebase-admin 초기화 (firebase.initializeApp())
+  // 2. DB에서 guardianId로 fcm_token 조회
+  // 3. admin.messaging().send({ token, notification: { title, body } }) 호출
+  
+  // 현재는 뼈대 구조만 시뮬레이션
+  console.log(`[FCM Dummy] To Guardian ${guardianId}: ${title} - ${body.substring(0, 20)}...`);
+  return { success: false, reason: "FCM not fully configured yet" }; // 실제 연결 전까지는 false 반환
+}
+
+/**
+ * 심각도가 High일 경우 최근 상담 이력이 있는 의사에게 알림 전송
+ */
+async function notifyDoctorIfHighSeverity({ infantId, infantName, cause, cryEventId }) {
+  const conn = await getConnection();
+  try {
+    // 1. 최근 상담 이력이 있는 의사 조회 (video_call_sessions 기준)
+    const result = await conn.execute(
+      `SELECT d.doctor_id, g.phone as doctor_phone, d.doctor_name
+       FROM video_call_sessions s
+       JOIN doctors d ON s.doctor_id = d.doctor_id
+       JOIN guardian g ON d.guardian_id = g.guardian_id
+       WHERE s.infant_id = :infantId
+         AND s.status = 'completed'
+         AND ROWNUM = 1
+       ORDER BY s.scheduled_time DESC`,
+      { infantId },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+
+    if (result.rows.length > 0) {
+      const { DOCTOR_PHONE, DOCTOR_NAME } = result.rows[0];
+      const normalizedPhone = normalizeKoreanPhone(DOCTOR_PHONE);
+      
+      if (normalizedPhone) {
+        const doctorSmsBody = `
+[긴급 알림] ${DOCTOR_NAME} 의사님,
+담당 환아(${infantName})에게서 높은 심각도의 울음이 감지되었습니다.
+- 원인: ${mapCauseToKoreanForTitle(cause)}
+대시보드에서 분석 결과 및 오디오를 확인해 주세요.
+`.trim();
+        
+        console.log(`👨‍⚕️ 의사에게 긴급 알림 전송 시도: ${DOCTOR_NAME}`);
+        await sendSms({ to: normalizedPhone, body: doctorSmsBody });
+        
+        // 의사 알림 로그도 남길 수 있으나 생략 (필요 시 추가)
+      }
+    }
+  } catch (err) {
+    console.error('❌ 의사 긴급 알림 실패:', err.message);
+  } finally {
+    await conn.close();
+  }
 }
 
 function buildSmsBody({ infantName, isCrying, cause, actionText }) {

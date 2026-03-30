@@ -3,10 +3,12 @@ import axios from 'axios';
 
 const NODE_API = axios.create({
   baseURL: 'http://localhost:4000/api',
+  timeout: 30000, // ✅ 30초 타임아웃 추가
 });
 
 const PYTHON_API = axios.create({
   baseURL: 'http://localhost:8001',
+  timeout: 30000, // ✅ 30초 타임아웃 추가
 });
 
 // JWT 토큰 자동 추가 인터셉터
@@ -51,6 +53,7 @@ export const cryAPI = {
     PYTHON_API.post(`/api/upload?infant_id=${infantId}&guardian_id=${guardianId}`, formData, {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
+  feedback: (data) => NODE_API.post('/analysis/feedback', data),
 };
 
 // ============================================

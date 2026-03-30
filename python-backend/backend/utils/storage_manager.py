@@ -145,7 +145,7 @@ class StorageManager:
                                 infant_id, event_time, duration_ms, confidence,
                                 severity, cry_type, detected_by, is_resolved
                             )
-                            VALUES (:1, SYSTIMESTAMP, :2, :3, :4, :5, :6, 'N')
+                            VALUES (:1, SYSTIMESTAMP, :2, :3, :4, :5, :6, 0)
                             RETURNING event_id INTO :7
                             """,
                             [

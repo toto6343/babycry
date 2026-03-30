@@ -18,8 +18,13 @@
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.1",
+    "multer": "^2.1.1",
     "openai": "^6.9.0",
     "oracledb": "^5.5.0",
-    "twilio": "^5.10.5"
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "twilio": "^5.10.5",
+    "winston": "^3.19.0"
   }
 }

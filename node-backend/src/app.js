@@ -1,7 +1,11 @@
-// src/app.js (수정)
+// src/app.js (Express app만 export)
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import morgan from 'morgan';
+import logger from './utils/logger.js';
+
+// Routes
 import authRoutes from './routes/authRoutes.js';
 import infantRoutes from './routes/infantRoutes.js';
 import analysisRoutes from './routes/analysisRoutes.js';
@@ -9,61 +13,58 @@ import reportRoutes from './routes/reportRoutes.js';
 import actionRoutes from './routes/actionRoutes.js';
 import chatbotRoutes from './routes/chatbotRoutes.js';
 import eventRoutes from './routes/eventRoutes.js';
+import videoCallRoutes from './routes/videoCallRoutes.js';
+import healthRoutes from './routes/healthRoutes.js';
+import visionRoutes from './routes/visionRoutes.js';
+import badgeRoutes from './routes/badgeRoutes.js';
+import communityRoutes from './routes/communityRoutes.js';
 
 dotenv.config();
 
 const app = express();
 
 // middleware
-app.use(cors());
+app.use(cors({
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  credentials: true
+}));
 app.use(express.json());
 
-// ✅ 모든 요청 로깅 (디버깅용) - 라우터보다 먼저!
-app.use((req, res, next) => {
-  console.log(`📍 요청: ${req.method} ${req.originalUrl}`);
-  next();
-});
+// ✅ Morgan HTTP 요청 로깅 설정 (Winston과 연동)
+const stream = {
+  write: (message) => logger.info(message.trim())
+};
+app.use(morgan(':method :url :status :res[content-length] - :response-time ms', { stream }));
 
-console.log('🔧 ===== 라우터 등록 시작 =====');
+logger.info('🔧 ===== 라우터 등록 시작 =====');
 
-// routes (순서 중요!)
 app.use('/api/analysis', analysisRoutes);
-console.log('✅ /api/analysis 라우터 등록됨');
-
 app.use('/api/reports', reportRoutes);
-console.log('✅ /api/reports 라우터 등록됨');
-
 app.use('/api/actions', actionRoutes);
-console.log('✅ /api/actions 라우터 등록됨');
-
 app.use('/api/auth', authRoutes);
-console.log('✅ /api/auth 라우터 등록됨');
-
 app.use('/api/infants', infantRoutes);
-console.log('✅ /api/infants 라우터 등록됨');
-
 app.use('/api/chatbot', chatbotRoutes);
-console.log('✅ /api/chatbot 라우터 등록됨');
-
 app.use('/api/events', eventRoutes);
-console.log('✅ /api/events 라우터 등록됨');
+app.use('/api/videocall', videoCallRoutes);
+app.use('/api/health', healthRoutes); // ✅ 성장/건강 관리 라우터 추가
+app.use('/api/vision', visionRoutes); // ✅ 비전 API 추가
+app.use('/api/badges', badgeRoutes); // ✅ 뱃지 API 추가
+app.use('/api/community', communityRoutes); // ✅ 커뮤니티 API 추가
 
-console.log('🏁 ===== 라우터 등록 완료 =====');
+logger.info('🏁 ===== 라우터 등록 완료 =====');
 
-// health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// 404 핸들러 (맨 마지막!)
 app.use((req, res, next) => {
-  console.log(`❌ 404 - 매칭되지 않은 요청: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({
-    error: 'Not Found',
-    method: req.method,
-    url: req.originalUrl,
-    message: '해당 엔드포인트를 찾을 수 없습니다.'
-  });
+  res.status(404).json({ success: false, error: 'Not Found' });
+});
+
+app.use((err, req, res, next) => {
+  logger.error(`❌ 서버 오류: ${err.message}`);
+  logger.error(err.stack);
+  res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
 });
 
 export default app;

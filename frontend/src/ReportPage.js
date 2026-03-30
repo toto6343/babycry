@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
 import axios from 'axios';
 import TextReport from './components/Textreport';
+import CryChart from './components/CryChart'; // ✅ 추가
 
 function ReportPage() {
   const { selectedInfant } = useAuth();
@@ -16,6 +17,9 @@ function ReportPage() {
   
   // ✅ 탭 상태 추가
   const [activeTab, setActiveTab] = useState('summary'); // 'summary' | 'aiReport'
+
+  // ✅ 커뮤니티 통계 상태 추가
+  const [communityStats, setCommunityStats] = useState(null);
 
   useEffect(() => {
     if (selectedInfant?.infantId && activeTab === 'summary') {
@@ -49,10 +53,20 @@ function ReportPage() {
       });
       
       console.log('✅ ===== Report 응답 성공 =====');
-      console.log('📊 응답 데이터:', response.data);
-      console.log('📊 총 이벤트 수:', response.data.summary?.totalEvents);
       
       setReport(response.data);
+
+      // ✅ 커뮤니티 데이터 로드
+      try {
+        const ageMonths = selectedInfant.ageMonths || 3; // 기본값
+        const cRes = await axios.get(`/api/community/stats/${ageMonths}`, {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (cRes.data.success) setCommunityStats(cRes.data.stats);
+      } catch (cErr) {
+        console.error('커뮤니티 통계 로드 실패', cErr);
+      }
+
     } catch (err) {
       console.error('❌ ===== Report 요청 실패 =====');
       console.error('📋 에러 객체:', err);
@@ -297,13 +311,37 @@ function ReportPage() {
                     <div style={styles.summaryContent}>
                       <div style={styles.summaryLabel}>최대 울음 시간</div>
                       <div style={styles.summaryValue}>{formatDuration(report.summary.maxDurationSeconds)}</div>
-                      <div style={styles.summaryDesc}>가장 오래 울었던 시간</div>
+                      <div style={styles.summaryDesc}>가장 길게 분석된 울음</div>
                     </div>
                   </div>
-                </div>
-              </div>
+                  </div>
+                  </div>
 
-              {/* 울음 타입별 통계 */}
+                  {/* ✅ 데이터 시각화 섹션 추가 */}
+                  {report.events && report.events.length > 0 && (
+                  <CryChart data={report.events} />
+                  )}
+
+                  {/* ✅ 커뮤니티 통계 비교 섹션 추가 */}
+                  {communityStats && (
+                    <div style={styles.section}>
+                      <div style={styles.sectionHeader}>
+                        <h2 style={styles.sectionTitle}>🌍 나와 비슷한 부모들은?</h2>
+                        <p style={styles.sectionSubtitle}>내 아기와 같은 월령({selectedInfant?.ageMonths || 3}개월) 또래들의 평균 데이터입니다.</p>
+                      </div>
+                      <div style={{display: 'flex', gap: '15px'}}>
+                        {communityStats.map((stat, i) => (
+                          <div key={i} style={{flex: 1, backgroundColor: '#f0f4f8', padding: '15px', borderRadius: '12px', textAlign: 'center'}}>
+                            <div style={{fontSize: '30px', marginBottom: '10px'}}>{getCryTypeEmoji(stat.type)}</div>
+                            <div style={{fontSize: '14px', color: '#555'}}>{stat.type}</div>
+                            <div style={{fontSize: '22px', fontWeight: 'bold', color: '#1976d2'}}>{stat.percentage}%</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 시간대별 분석 섹션 */}
               <div style={styles.section}>
                 <div style={styles.sectionHeader}>
                   <h2 style={styles.sectionTitle}>🍼 울음 유형별 분석</h2>

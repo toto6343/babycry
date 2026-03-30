@@ -9,6 +9,7 @@ function CryUploadPage() {
   const navigate = useNavigate();
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('');
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   
@@ -26,6 +27,97 @@ function CryUploadPage() {
   const [recordedChunks, setRecordedChunks] = useState([]);
   const [recordMode, setRecordMode] = useState(false);
   const recordingIntervalRef = useRef(null);
+
+  // ✅ 실시간 모니터 모드 관련 state
+  const [monitorMode, setMonitorMode] = useState(false);
+  const [dbLevel, setDbLevel] = useState(-100);
+  const analyserRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const monitorStreamRef = useRef(null); // ✅ 추가: 모니터링 스트림 관리용
+  const monitorIntervalRef = useRef(null);
+  const cryDetectedRef = useRef(0); // 울음 지속 시간 카운트
+
+  // ✅ 모니터링 로직
+  useEffect(() => {
+    if (monitorMode) {
+      startMonitoring();
+    } else {
+      stopMonitoring();
+    }
+    return () => stopMonitoring();
+  }, [monitorMode]);
+
+  const startMonitoring = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      monitorStreamRef.current = stream; // ✅ 스트림 저장
+      
+      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContextRef.current.createMediaStreamSource(stream);
+      const analyser = audioContextRef.current.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      analyserRef.current = analyser;
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      monitorIntervalRef.current = setInterval(() => {
+        if (!analyserRef.current) return;
+        
+        analyser.getByteFrequencyData(dataArray);
+        const average = dataArray.reduce((a, b) => a + b) / bufferLength;
+        const db = average > 0 ? 20 * Math.log10(average / 255) : -100;
+        setDbLevel(db.toFixed(1));
+
+        // 🔊 울음 감지 로직 (-30dB 이상의 소리가 2초 이상 지속될 때)
+        if (db > -35) {
+          cryDetectedRef.current += 0.5;
+          if (cryDetectedRef.current >= 2 && !isRecording && !uploading) {
+            console.log('🚨 아기 울음 감지! 자동 녹음을 시작합니다.');
+            stopMonitoring(); // ✅ 중요: 녹음 시작 전 모니터링 리소스 해제
+            setMonitorMode(false); 
+            startRecording().then(() => {
+              // 5초 후 자동 정지 및 업로드
+              setTimeout(() => {
+                stopRecording();
+                // 약간의 지연 후 자동 업로드 버튼 클릭 효과
+                setTimeout(() => handleUpload(), 1000);
+              }, 5000);
+            });
+          }
+        } else {
+          cryDetectedRef.current = 0;
+        }
+      }, 500);
+    } catch (err) {
+      console.error('모니터링 시작 실패:', err);
+      setMonitorMode(false);
+    }
+  };
+
+  const stopMonitoring = () => {
+    // 1. 인터벌 중단
+    if (monitorIntervalRef.current) {
+      clearInterval(monitorIntervalRef.current);
+      monitorIntervalRef.current = null;
+    }
+    
+    // 2. 오디오 트랙 중단 (마이크 끄기)
+    if (monitorStreamRef.current) {
+      monitorStreamRef.current.getTracks().forEach(track => track.stop());
+      monitorStreamRef.current = null;
+    }
+    
+    // 3. 오디오 컨텍스트 닫기
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    
+    setDbLevel(-100);
+    cryDetectedRef.current = 0;
+  };
 
   // ✅ WebM을 WAV로 변환하는 함수
   const audioBufferToWav = (buffer) => {
@@ -315,74 +407,69 @@ function CryUploadPage() {
       return;
     }
 
-    if (!selectedInfant || !selectedInfant.infantId) {
-      setError('아기 정보를 불러올 수 없습니다. 아기를 선택해주세요.');
-      return;
-    }
-
-    if (!user || !user.guardianId) {
-      setError('사용자 정보를 불러올 수 없습니다. 다시 로그인해주세요.');
-      return;
-    }
-
-    setUploading(true);
-    setError('');
-    setResult(null);
-
+    // ✅ 3번 고도화: Edge AI 기반 사전 검사 (음량 체크)
     try {
+      setUploading(true);
+      setError('');
+
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      const rawData = audioBuffer.getChannelData(0);
+      
+      // RMS(Root Mean Square) 계산
+      let sum = 0;
+      for (let i = 0; i < rawData.length; i++) {
+        sum += rawData[i] * rawData[i];
+      }
+      const rms = Math.sqrt(sum / rawData.length);
+      console.log('📊 분석 전 오디오 RMS:', rms);
+
+      // 소리가 너무 작은 경우 (0.01 미만) - 서버 전송 차단
+      if (rms < 0.005) {
+        setError('울음 소리가 너무 작거나 감지되지 않았습니다. 아기 가까이에서 다시 녹음해주세요.');
+        setUploading(false);
+        return;
+      }
+      
+      // 1. 업로드 시작
+      setStatusMessage('파일 업로드 중...');
       const formData = new FormData();
       formData.append('audio', file);
 
-      const infantId = parseInt(selectedInfant.infantId);
-      const guardianId = parseInt(user.guardianId);
-
-      console.log('📤 업로드 정보:', {
-        infantId,
-        guardianId,
-        fileName: file.name,
-        fileSize: file.size,
-        fileType: file.type
-      });
-
-      if (isNaN(infantId) || isNaN(guardianId)) {
-        throw new Error(`잘못된 ID 값입니다. infantId: ${infantId}, guardianId: ${guardianId}`);
+      // 2. 서버 분석 요청
+      setStatusMessage('AI 울음 분석 중 (최대 10초)...');
+      const response = await cryAPI.upload(formData, selectedInfant.infantId, user.guardianId);
+      
+      if (response.data && response.data.success) {
+        setResult(response.data);
+        setStatusMessage('분석 완료!');
+      } else {
+        throw new Error(response.data?.error || '분석 중 오류가 발생했습니다.');
       }
 
-      const response = await cryAPI.upload(
-        formData,
-        infantId,
-        guardianId
-      );
-      
-      console.log('✅ 업로드 성공:', response.data);
-      setResult(response.data);
-      
-      setFile(null);
-      cleanupAudio();
     } catch (err) {
-      console.error('❌ Upload error:', err);
-      
-      let errorMessage = '업로드에 실패했습니다. 다시 시도해주세요.';
-      
-      if (err.response?.data?.detail) {
-        const detail = err.response.data.detail;
-        
-        if (Array.isArray(detail)) {
-          errorMessage = detail.map(e => e.msg).join(', ');
-        } 
-        else if (typeof detail === 'string') {
-          errorMessage = detail;
-        }
-        else if (typeof detail === 'object') {
-          errorMessage = JSON.stringify(detail);
-        }
-      } else if (err.message) {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
+      console.error('❌ Upload/Analysis error:', err);
+      setError(err.message || '업로드 중 오류가 발생했습니다.');
+      setStatusMessage('오류 발생');
     } finally {
       setUploading(false);
+    }
+  };
+
+  // ✅ 1번: 피드백 처리 함수 수정
+  const handleFeedback = async (accurate) => {
+    if (!result?.event_id) return;
+    try {
+      await cryAPI.feedback({
+        eventId: result.event_id,
+        accurate: accurate,
+        actualType: result.prediction
+      });
+      alert('피드백이 반영되었습니다. 감사합니다!');
+    } catch (err) {
+      console.error('Feedback error:', err);
+      alert('피드백 저장에 실패했습니다.');
     }
   };
 
@@ -531,37 +618,43 @@ function CryUploadPage() {
 
       <div style={styles.uploadCard}>
         <div style={styles.modeSelector}>
-          <button
-            style={{
-              ...styles.modeButton,
-              ...(!recordMode ? styles.modeButtonActive : {})
-            }}
-            onClick={() => {
-              if (isRecording) {
-                cancelRecording();
-              }
-              setRecordMode(false);
-              setError('');
-            }}
-            disabled={uploading || isRecording}
-          >
-            🎵 파일 업로드
-          </button>
-          <button
-            style={{
-              ...styles.modeButton,
-              ...(recordMode ? styles.modeButtonActive : {})
-            }}
-            onClick={() => {
-              setRecordMode(true);
-              setFile(null);
-              cleanupAudio();
-              setError('');
-            }}
-            disabled={uploading || isRecording}
-          >
-            🎙️ 직접 녹음
-          </button>
+          {/* ... (기존 버튼들) */}
+        </div>
+
+        {/* ✅ 실시간 베이비 모니터 모드 UI 추가 */}
+        <div style={styles.monitorCard}>
+          <div style={styles.monitorHeader}>
+            <div style={styles.monitorTitle}>
+              <span style={styles.monitorIcon}>📱</span>
+              실시간 베이비 모니터
+            </div>
+            <label style={styles.switch}>
+              <input 
+                type="checkbox" 
+                checked={monitorMode}
+                onChange={() => setMonitorMode(!monitorMode)}
+              />
+              <span style={styles.slider}></span>
+            </label>
+          </div>
+          
+          {monitorMode && (
+            <div style={styles.monitorStatus}>
+              <div style={styles.dbMeterContainer}>
+                <div style={styles.dbLabel}>현재 음량: {dbLevel} dB</div>
+                <div style={styles.dbBarBackground}>
+                  <div style={{
+                    ...styles.dbBarFill,
+                    width: `${Math.max(0, (parseFloat(dbLevel) + 100) * 1.25)}%`,
+                    backgroundColor: parseFloat(dbLevel) > -35 ? '#f44336' : '#4caf50'
+                  }} />
+                </div>
+              </div>
+              <p style={styles.monitorHint}>
+                ※ 아기 근처에 폰을 두세요. 큰 울음소리가 감지되면 자동으로 분석을 시작합니다.
+              </p>
+            </div>
+          )}
         </div>
 
         {recordMode && (
@@ -715,7 +808,7 @@ function CryUploadPage() {
           {uploading ? (
             <>
               <span style={styles.buttonSpinner}></span>
-              분석 중...
+              {statusMessage || '분석 중...'}
             </>
           ) : (
             '🔍 울음 분석하기'
@@ -782,6 +875,27 @@ function CryUploadPage() {
               </ul>
             </div>
 
+            {/* ✅ 1번 고도화: 멀티모달(Vision) 분석 유도 섹션 추가 */}
+            {(result.prediction === 'discomfort' || result.prediction === 'uncomfortable' || result.prediction === 'belly_pain' || result.prediction === 'pain') && (
+              <div style={styles.visionSuggestCard}>
+                <div style={styles.visionSuggestHeader}>
+                  <span style={styles.visionIcon}>📸</span>
+                  <span>정확한 확인을 위해 사진을 찍어보세요!</span>
+                </div>
+                <p style={styles.visionSuggestText}>
+                  {result.prediction.includes('pain') 
+                    ? '배앓이가 의심되나요? 아기의 대변 사진을 찍어 건강 상태를 체크해보세요.'
+                    : '기저귀가 젖었거나 피부 발진이 있을 수 있습니다. 사진 분석으로 확인해보세요.'}
+                </p>
+                <button 
+                  style={styles.visionButton}
+                  onClick={() => navigate('/health', { state: { autoOpenVision: true, analysisType: result.prediction.includes('pain') ? 'diaper' : 'skin' } })}
+                >
+                  🔍 Vision AI로 확인하기
+                </button>
+              </div>
+            )}
+
             {/* ✅ 디버그 정보 추가 */}
             {result.probabilities && (
               <div style={styles.debugInfo}>
@@ -806,18 +920,26 @@ function CryUploadPage() {
             )}
 
             <div style={styles.actionGuide}>
-              <div style={styles.actionGuideHeader}>
-                📊 다음 단계
+              {/* ... (기존 내용) */}
+            </div>
+
+            {/* ✅ 1번: 개인화 피드백 섹션 추가 */}
+            <div style={styles.feedbackSection}>
+              <p style={styles.feedbackTitle}>🤖 AI 분석 결과가 정확했나요?</p>
+              <div style={styles.feedbackButtons}>
+                <button 
+                  onClick={() => handleFeedback(true)} 
+                  style={{...styles.feedbackBtn, backgroundColor: '#e8f5e9', color: '#2e7d32'}}
+                >
+                  👍 정확해요
+                </button>
+                <button 
+                  onClick={() => handleFeedback(false)} 
+                  style={{...styles.feedbackBtn, backgroundColor: '#ffebee', color: '#c62828'}}
+                >
+                  👎 아쉬워요
+                </button>
               </div>
-              <div style={styles.actionGuideText}>
-                대시보드에서 AI 추천 조치를 확인하고, 취한 조치를 기록해보세요.
-              </div>
-              <button
-                onClick={() => navigate('/dashboard')}
-                style={styles.dashboardButton}
-              >
-                대시보드로 이동
-              </button>
             </div>
           </div>
         </div>
@@ -927,6 +1049,92 @@ const styles = {
     color: '#1976d2',
     boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
   },
+  // ✅ 모니터 모드 스타일 추가
+  monitorCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: '12px',
+    padding: '20px',
+    marginBottom: '24px',
+    border: '1px solid #e9ecef',
+  },
+  monitorHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  monitorTitle: {
+    fontSize: '18px',
+    fontWeight: '700',
+    color: '#333',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  monitorIcon: {
+    fontSize: '24px',
+  },
+  monitorStatus: {
+    marginTop: '20px',
+    animation: 'fadeIn 0.3s ease',
+  },
+  dbMeterContainer: {
+    backgroundColor: 'white',
+    padding: '15px',
+    borderRadius: '10px',
+    border: '1px solid #dee2e6',
+  },
+  dbLabel: {
+    fontSize: '14px',
+    color: '#666',
+    marginBottom: '10px',
+    fontWeight: '600',
+  },
+  dbBarBackground: {
+    height: '12px',
+    backgroundColor: '#e9ecef',
+    borderRadius: '6px',
+    overflow: 'hidden',
+  },
+  dbBarFill: {
+    height: '100%',
+    transition: 'width 0.2s ease, background-color 0.2s ease',
+  },
+  monitorHint: {
+    marginTop: '12px',
+    fontSize: '13px',
+    color: '#dc3545',
+    fontWeight: '500',
+    textAlign: 'center',
+  },
+  switch: {
+    position: 'relative',
+    display: 'inline-block',
+    width: '60px',
+    height: '34px',
+  },
+  slider: {
+    position: 'absolute',
+    cursor: 'pointer',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#ccc',
+    transition: '.4s',
+    borderRadius: '34px',
+    '&:before': {
+      position: 'absolute',
+      content: '""',
+      height: '26px',
+      width: '26px',
+      left: '4px',
+      bottom: '4px',
+      backgroundColor: 'white',
+      transition: '.4s',
+      borderRadius: '50%',
+    }
+  },
+  // (참고: 실제 프로젝트에서는 input:checked + .slider 형태의 CSS가 필요합니다.)
   recordingArea: {
     padding: '60px 20px',
     textAlign: 'center',
@@ -1276,6 +1484,47 @@ const styles = {
     lineHeight: '2',
     marginBottom: '4px',
   },
+  // ✅ 멀티모달(Vision) 분석 제안 카드 스타일 추가
+  visionSuggestCard: {
+    marginTop: '24px',
+    padding: '24px',
+    backgroundColor: '#f3e5f5',
+    borderRadius: '16px',
+    border: '2px dashed #9c27b0',
+    textAlign: 'center',
+    animation: 'pulse-glow 2s infinite ease-in-out',
+  },
+  visionSuggestHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px',
+    fontSize: '18px',
+    fontWeight: '700',
+    color: '#7b1fa2',
+    marginBottom: '12px',
+  },
+  visionIcon: {
+    fontSize: '28px',
+  },
+  visionSuggestText: {
+    fontSize: '15px',
+    color: '#6a1b9a',
+    marginBottom: '20px',
+    lineHeight: '1.6',
+  },
+  visionButton: {
+    padding: '12px 24px',
+    backgroundColor: '#9c27b0',
+    color: 'white',
+    border: 'none',
+    borderRadius: '12px',
+    fontSize: '15px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    transition: 'all 0.2s ease',
+    boxShadow: '0 4px 12px rgba(156, 39, 176, 0.3)',
+  },
   // ✅ 디버그 정보 스타일 추가
   debugInfo: {
     padding: '20px',
@@ -1336,6 +1585,35 @@ const styles = {
     color: '#333',
     lineHeight: '1.6',
     marginBottom: '16px',
+  },
+  // ✅ 피드백 섹션 스타일 추가
+  feedbackSection: {
+    marginTop: '24px',
+    padding: '20px',
+    backgroundColor: '#f8f9fa',
+    borderRadius: '12px',
+    textAlign: 'center',
+    border: '1px solid #e9ecef',
+  },
+  feedbackTitle: {
+    fontSize: '15px',
+    fontWeight: '600',
+    color: '#495057',
+    marginBottom: '15px',
+  },
+  feedbackButtons: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'center',
+  },
+  feedbackBtn: {
+    padding: '10px 20px',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '14px',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    transition: 'transform 0.2s',
   },
   dashboardButton: {
     width: '100%',

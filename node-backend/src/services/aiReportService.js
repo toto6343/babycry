@@ -2,6 +2,16 @@
 import { getOpenAI } from '../config/openai.js';
 const openai = getOpenAI();
 
+// ✅ 월령별 발달 단계 정보 (원더위크 및 주요 이정표)
+const DEVELOPMENT_MILESTONES = {
+  1: "오감의 발달 시기. 주변 소리와 빛에 민감해지며 울음이 늘 수 있음.",
+  2: "사회적 미소 시작. 밤낮 구분이 생기기 시작하는 시기.",
+  3: "원더위크(5주~8주) 전후. 주변 사물을 인지하며 혼란을 느껴 자주 울 수 있음.",
+  4: "뒤집기 시도. 수면 퇴행(Sleep Regression)이 나타날 수 있는 시기.",
+  5: "원더위크(19주) 전후. 관계의 세계를 깨달으며 분리불안이 생길 수 있음.",
+  6: "소화 기관 발달 및 이유식 준비기. 밤중 수유 중단 시도 시기."
+};
+
 const REPORT_STYLE_GUIDE = `
 당신은 "아기 울음 데이터 분석 리포트"를 작성하는 전문 육아 컨설턴트입니다.
 
@@ -239,6 +249,16 @@ ${(summaryData.bySeverity || []).map(s => `  - ${s.severity}: ${s.count}회 (${s
 **다음 울음 예측**:
   ${nextCryTimeKST || 'null (예측 불가)'}
 
+**또래 집단 비교 (Peer Analytics)**:
+  - 현재 아기 월령: ${summaryData.peerComparison?.targetAgeMonths || '알 수 없음'}개월
+  - 동일 월령 아기들의 하루 평균 울음 횟수: ${summaryData.peerComparison?.peerDailyAvgEvents || '데이터 없음'}회
+  - 우리 아기의 하루 평균 울음 횟수: ${(summaryData.summary.totalEvents / 7).toFixed(1)}회
+
+**멀티모달 교차 분석 데이터 (기저귀/피부 AI 분석 기록)**:
+  ${summaryData.visionAnalysis && summaryData.visionAnalysis.length > 0 
+    ? summaryData.visionAnalysis.map(v => `- [${v.type}] 심각도 ${v.severity}: ${v.opinion}`).join('\n  ') 
+    : '최근 분석 기록 없음'}
+
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📝 작성 지침
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -249,6 +269,8 @@ ${(summaryData.bySeverity || []).map(s => `  - ${s.severity}: ${s.count}회 (${s
 4. nextCryPredictionTime이 null이면, 대신 일반적인 패턴 정보를 제공하세요.
 5. 수치와 백분율을 적극 활용하여 구체성을 높이세요.
 6. 보호자가 즉시 실행할 수 있는 구체적인 조언을 포함하세요.
+7. (중요) 또래 집단 데이터(Peer Analytics)가 있다면 우리 아기의 상태가 백분위 상 어느 정도인지 객관적으로 안심시켜 주세요.
+8. (중요) '멀티모달 교차 분석 데이터'가 있다면, 이 정보(예: 기저귀 발진, 녹변 등)와 아기의 주된 울음 원인(예: 배앓이, 불편함) 사이의 상관관계를 강력하게 추론하여 설명하세요.
 
 전체 리포트가 최소 20-30개 문단이 되도록 충분히 상세하게 작성해주세요.
 `;
@@ -274,7 +296,159 @@ ${(summaryData.bySeverity || []).map(s => `  - ${s.severity}: ${s.count}회 (${s
 }
 
 /**
- * API 실패 시 폴백 리포트
+ * 의사 전용 AI 요약 리포트 생성 (Doctor's AI Briefing)
+ * 최근 24시간 데이터를 기반으로 전문적인 의학적 관점의 요약 제공
+ */
+export async function generateDoctorSummary(infantData, recentEvents) {
+  const DOCTOR_BRIEFING_PROMPT = `
+당신은 소아과 전문의의 진료를 돕는 AI 의료 어시스턴트입니다.
+아래 제공되는 아기의 최근 24시간 울음 분석 데이터를 바탕으로, 의사가 30초 내에 파악할 수 있는 "진료 전 요약 리포트"를 작성하세요.
+
+[작성 지침]
+1. 전문적이고 객관적인 의학적 톤을 유지하세요.
+2. 불필요한 수식어나 격려 문구는 생략하고 핵심 정보만 기술하세요.
+3. 가장 위험하거나 주의 깊게 봐야 할 'Red Flags'를 최상단에 배치하세요.
+4. AI 분석의 신뢰도(Confidence)와 심각도(Severity)를 반드시 언급하세요.
+
+[리포트 구조]
+- 🚨 긴급도 및 위험 징후 (Urgency & Red Flags)
+- 📊 주요 울음 패턴 (Key Patterns)
+- 💡 AI 임상 추론 (AI Clinical Reasoning)
+- 📋 권장 확인 사항 (Recommended Checks)
+`;
+
+  const eventSummary = recentEvents.map(e => 
+    `- 시간: ${new Date(e.event_time).toLocaleString('ko-KR')}, 유형: ${e.cry_type}, 심각도: ${e.severity}, 신뢰도: ${e.confidence}%`
+  ).join('\n');
+
+  // ✅ 월령별 발달 맥락 추출
+  const milestone = DEVELOPMENT_MILESTONES[infantData.age_months] || "일반적인 성장 단계";
+
+  const userPrompt = `
+  [환아 정보]
+  - 이름: ${infantData.name}
+  - 월령: ${infantData.age_months}개월
+  - 성별: ${infantData.gender}
+  - 📅 현재 발달 단계 특징: ${milestone}
+
+  [최근 24시간 울음 이벤트 정보]
+  ${eventSummary || '최근 데이터 없음'}
+
+  [특이사항]
+  - 상담 권장 여부: ${recentEvents.some(e => e.needs_consultation === 1) ? 'YES (긴급)' : 'NO'}
+
+  위 발달 단계 특징과 울음 데이터를 결합하여 의사 전용 브리핑을 작성해주세요. 
+  특히 현재 월령에서 나타날 수 있는 생리적 현상(예: 원더위크, 수면퇴행)과의 연관성을 언급해주세요.
+  `;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: DOCTOR_BRIEFING_PROMPT },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.3, // 일관성 있고 객관적인 응답을 위해 낮게 설정
+    });
+
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error('❌ 의사 요약 생성 오류:', error);
+    return "데이터 분석 중 오류가 발생했습니다. 직접 로그를 확인해 주세요.";
+  }
+}
+
+/**
+ * 화상 상담 대화 요약 (AI 진료 일지 생성)
+ */
+export async function summarizeConsultation(transcript) {
+  const SUMMARY_PROMPT = `
+당신은 소아과 진료 기록을 정리하는 전문 의료 서기입니다.
+의사와 보호자 사이의 화상 상담 대화 내용을 바탕으로 표준 진료 일지(Clinical Note)를 작성하세요.
+
+[일지 구조]
+1. 상담 핵심 요약 (Summary)
+2. 주요 증상 및 상태 (Symptoms)
+3. 의사의 권고 및 처방 (Recommendations)
+4. 향후 관찰 필요 사항 (Follow-up)
+
+[작성 지침]
+- 구어체(~했어요)를 전문적인 문어체(~함, ~임)로 변환하세요.
+- 환아의 건강과 직접적인 관련이 없는 잡담은 제외하세요.
+- 불확실한 부분은 '추정됨'으로 표기하세요.
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: SUMMARY_PROMPT },
+        { role: 'user', content: `다음 대화 내용을 요약해 주세요:\n\n${transcript}` },
+      ],
+      temperature: 0.3,
+    });
+
+    return response.choices[0].message.content;
+  } catch (err) {
+    console.error('❌ 상담 요약 오류:', err);
+    return "상담 내용 요약에 실패했습니다.";
+  }
+}
+
+/**
+ * 아기 하루 데이터를 기반으로 감성적인 'AI 성장 일기' 생성
+ */
+export async function generateDailyDiary(infantData, summaryData) {
+  const DIARY_PROMPT = `
+당신은 아기의 시점에서 부모님께 편지를 쓰는 "성장 일기 AI"입니다.
+제공된 하루 울음 데이터를 바탕으로, 오늘 하루 아기가 느꼈을 감정과 부모님의 노고에 대한 감사를 담아 다정하고 따뜻한 일기를 작성해주세요.
+
+[작성 지침]
+1. 아기의 시점(1인칭)에서 작성하거나, 아기를 관찰하는 아주 따뜻한 육아 조력자의 시점에서 작성하세요.
+2. "오늘 나는 배가 조금 고파서 울기도 했지만, 엄마/아빠가 금방 안아줘서 안심했어요"와 같이 데이터를 자연스럽게 녹여내세요.
+3. 수치 위주의 딱딱한 보고서가 아닌, 감성적이고 따뜻한 문체(~해요, ~했어요)를 사용하세요.
+4. 마지막에는 부모님께 드리는 격려와 사랑의 메시지를 꼭 포함하세요.
+5. 이모지를 적절히 사용하여 생동감을 주되, 너무 과하지 않게 하세요.
+
+[구조]
+- 제목: 오늘 우리의 기록 (날짜 포함 가능)
+- 본문: 하루의 흐름과 주요 사건(울음의 의미)에 대한 이야기
+- 맺음말: 부모님을 향한 응원
+`;
+
+  const userPrompt = `
+[아기 정보]
+- 이름: ${infantData.name}
+- 월령: ${infantData.age_months}개월
+
+[오늘의 데이터 요약]
+- 총 울음 횟수: ${summaryData.totalEvents}회
+- 가장 많았던 울음 원인: ${summaryData.topCryType}
+- 가장 효과적이었던 부모님의 조치: ${summaryData.bestAction}
+- 심각했던 순간: ${summaryData.highSeverityCount}회
+
+위 데이터를 바탕으로 따뜻한 성장 일기를 작성해주세요.
+`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: DIARY_PROMPT },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.8, // 감성적인 표현을 위해 조금 높게 설정
+    });
+
+    return response.choices[0].message.content;
+  } catch (error) {
+    console.error('❌ AI 일기 생성 오류:', error);
+    return `${infantData.name}와 함께한 소중한 하루였습니다. 오늘은 아기가 ${summaryData.topCryType} 때문에 조금 힘들었지만 부모님의 사랑으로 잘 이겨냈어요. 내일은 더 많이 웃는 하루가 될 거예요.`;
+  }
+}
+
+/**
+ * 간단한 기본 리포트 생성 (폴백용)
  */
 function generateFallbackReport(summaryData) {
   return `

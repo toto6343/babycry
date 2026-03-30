@@ -1,19 +1,103 @@
 import express from 'express';
 import { getPool } from '../db/oracle.js';
 import { authRequired } from '../middleware/authMiddleware.js';
-import { generateAiReport } from '../services/aiReportService.js';
+import { generateAiReport, generateDoctorSummary } from '../services/aiReportService.js'; // ✅ 추가
 
 const router = express.Router();
 const pool = getPool();
 
 // ==========================================
 // 🔥 중요: 라우트 순서
-// 1. /auto (쿼리 파라미터)
-// 2. /summary/:infantId (구체적 경로)
-// 3. /text/:infantId (텍스트 리포트 - 새로 추가) ✨
-// 4. /generate/:infantId (POST, 구체적 경로)
-// 5. /:infantId (가장 마지막 - catch-all)
+// 1. /doctor-summary/:sessionId (🆕 신규)
+// 2. /auto (쿼리 파라미터)
+// ...
 // ==========================================
+
+// ==========================================
+// 🆕 0️⃣ GET /api/reports/doctor-summary/:sessionId - 의사용 AI 요약
+// ==========================================
+router.get('/doctor-summary/:sessionId', authRequired, async (req, res) => {
+  console.log('📍 /api/reports/doctor-summary/:sessionId 호출');
+  const { sessionId } = req.params;
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // 1) 세션 정보 및 환아 정보 조회
+    const sessionResult = await conn.execute(
+      `SELECT 
+         v.infant_id, 
+         i.name, 
+         TRUNC(MONTHS_BETWEEN(SYSDATE, i.birth_date)) as age_months,
+         i.gender
+       FROM video_call_sessions v
+       JOIN infant i ON v.infant_id = i.infant_id
+       WHERE v.session_id = :sessionId`,
+      { sessionId }
+    );
+
+    if (sessionResult.rows.length === 0) {
+      return res.status(404).json({ message: '상담 세션 또는 환아 정보를 찾을 수 없습니다.' });
+    }
+
+    const [infantId, name, ageMonths, gender] = sessionResult.rows[0];
+    const infantData = { name, age_months: ageMonths, gender };
+
+    // 2) 최근 24시간 울음 이벤트 조회 (오디오 파일 경로 포함)
+    const eventsResult = await conn.execute(
+      `SELECT 
+         ce.event_time, 
+         ce.cry_type, 
+         ce.severity, 
+         ce.confidence,
+         ce.needs_consultation,
+         af.storage_uri
+       FROM cry_event ce
+       LEFT JOIN audio_file af ON ce.infant_id = af.infant_id 
+         AND ABS(EXTRACT(SECOND FROM (ce.event_time - af.upload_time))) < 5
+       WHERE ce.infant_id = :infantId
+         AND ce.event_time >= SYSTIMESTAMP - INTERVAL '1' DAY
+       ORDER BY ce.event_time DESC`,
+      { infantId }
+    );
+
+    const recentEvents = eventsResult.rows.map(row => ({
+      event_time: row[0],
+      cry_type: row[1],
+      severity: row[2],
+      confidence: row[3],
+      needs_consultation: row[4],
+      audio_url: row[5] ? `http://localhost:5000/${row[5]}` : null // Python 정적 파일 서버 주소
+    }));
+
+    // 3) AI 요약 생성 (30초 내 파악용)
+    console.log('🤖 의사용 AI 요약 브리핑 생성 중...');
+    const doctorSummary = await generateDoctorSummary(infantData, recentEvents);
+
+    res.json({
+      success: true,
+      infantName: name,
+      doctorSummary: doctorSummary,
+      eventCount: recentEvents.length,
+      recentAudioUrl: recentEvents.length > 0 ? recentEvents[0].audio_url : null, // ✅ 최신 오디오
+      latestEventTime: recentEvents.length > 0 ? recentEvents[0].event_time : null, // ✅ 최신 시간
+      generatedAt: new Date().toISOString()
+    });
+
+  } catch (err) {
+    console.error('❌ /doctor-summary 오류:', err);
+    res.status(500).json({ message: '의사 요약 생성 실패', error: err.message });
+  } finally {
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (err) {
+        console.error('DB 연결 종료 오류:', err);
+      }
+    }
+  }
+});
 
 // ==========================================
 // 1️⃣ GET /api/reports/auto - 자동 리포트 생성
@@ -618,7 +702,76 @@ router.get('/:infantId', authRequired, async (req, res) => {
 });
 
 // ==========================================
+// 🆕 6️⃣ GET /api/reports/doctor/high-risk - 의사용 능동형 CRM (3단계 고도화)
+// ==========================================
+router.get('/doctor/high-risk', authRequired, async (req, res) => {
+  console.log('📍 GET /api/reports/doctor/high-risk 호출');
+  // req.user.guardianId (의사의 guardian_id)를 이용하여 연결된 의사인지 확인 후 
+  // 심각도가 High인 최근 이벤트를 가진 환아 목록을 조회합니다.
+  
+  const doctorGuardianId = req.user.guardianId;
+
+  let conn;
+  try {
+    conn = await pool.getConnection();
+
+    // 의사 정보 조회
+    const doctorRes = await conn.execute(
+      `SELECT doctor_id FROM doctors WHERE guardian_id = :guardianId`,
+      { guardianId: doctorGuardianId }
+    );
+
+    if (doctorRes.rows.length === 0) {
+      return res.status(403).json({ message: '의사 권한이 없습니다.' });
+    }
+
+    const doctorId = doctorRes.rows[0][0];
+
+    // 의사와 상담 이력이 있거나 예약된 환아 중 최근 1주일간 High 심각도 울음이 많은 순으로 정렬
+    const sql = `
+      SELECT 
+        i.infant_id, 
+        i.name, 
+        COUNT(ce.event_id) as high_risk_count,
+        MAX(ce.event_time) as last_event_time
+      FROM video_call_sessions vcs
+      JOIN infant i ON vcs.infant_id = i.infant_id
+      JOIN cry_event ce ON i.infant_id = ce.infant_id
+      WHERE vcs.doctor_id = :doctorId
+        AND ce.severity = 'High'
+        AND ce.event_time >= SYSDATE - 7
+      GROUP BY i.infant_id, i.name
+      ORDER BY high_risk_count DESC
+    `;
+    
+    const result = await conn.execute(sql, { doctorId });
+    
+    const highRiskPatients = result.rows.map(r => ({
+      infantId: r[0],
+      name: r[1],
+      highRiskCount: r[2],
+      lastEventTime: r[3]
+    }));
+
+    res.json({ success: true, highRiskPatients });
+
+  } catch (err) {
+    console.error('❌ /doctor/high-risk 오류:', err);
+    res.status(500).json({ message: '위험 환아 목록 조회 실패' });
+  } finally {
+    if (conn) {
+      try {
+        await conn.close();
+      } catch (err) {
+        console.error('DB 연결 종료 오류:', err);
+      }
+    }
+  }
+});
+
+// ==========================================
 // 헬퍼 함수
+
 // ==========================================
 function translateCause(cause) {
   const map = {

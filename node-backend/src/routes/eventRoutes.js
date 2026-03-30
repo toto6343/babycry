@@ -16,7 +16,8 @@ router.post('/create', async (req, res) => {
     severity, 
     confidence,
     duration,      // duration_ms (초 단위로 받아서 밀리초로 변환)
-    timestamp 
+    timestamp,
+    needs_consultation // ✅ 추가
   } = req.body;
 
   console.log('📥 이벤트 저장 요청:', req.body);
@@ -57,6 +58,9 @@ router.post('/create', async (req, res) => {
   try {
     conn = await getConnection();
     
+    // ✅ needs_consultation을 1 또는 0으로 변환
+    const needsConsultationVal = (needs_consultation === true || needs_consultation === 1 || needs_consultation === 'Y') ? 1 : 0;
+    
     const result = await conn.execute(
       `
       INSERT INTO cry_event (
@@ -68,6 +72,7 @@ router.post('/create', async (req, res) => {
         cry_type,
         detected_by,
         is_resolved,
+        needs_consultation,
         created_at
       ) VALUES (
         :infantId,
@@ -78,6 +83,7 @@ router.post('/create', async (req, res) => {
         :cryType,
         :detectedBy,
         :isResolved,
+        :needsConsultation,
         SYSTIMESTAMP
       )
       RETURNING event_id INTO :eventId
@@ -89,8 +95,9 @@ router.post('/create', async (req, res) => {
         confidence: confidence ? Number(confidence) : null,
         severity: normalizedSeverity,
         cryType: mappedCryType,
-        detectedBy: 'AI_MODEL', // 고정값 또는 파라미터로 받을 수 있음
-        isResolved: 'N', // 기본값
+        detectedBy: 'AI_MODEL', 
+        isResolved: 0, 
+        needsConsultation: needsConsultationVal,
         eventId: { dir: oracledb.BIND_OUT, type: oracledb.NUMBER }
       },
       { autoCommit: true }

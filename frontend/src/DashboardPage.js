@@ -1,6 +1,7 @@
 // src/DashboardPage.js (전체 코드 - 자동재생 한 번만 수정)
 import React, { useState, useEffect, useRef } from 'react';
 import { dashboardAPI, actionAPI } from './api';
+import axios from 'axios'; // ✅ 추가
 import { useAuth } from './AuthContext';
 import MusicPlayer from './MusicPlayer';
 
@@ -14,6 +15,7 @@ function DashboardPage() {
   
   const [showMusicPlayer, setShowMusicPlayer] = useState(false);
   const [currentMusicType, setCurrentMusicType] = useState(null);
+  const [badges, setBadges] = useState([]); // ✅ 추가
   
   // ✅ 자동재생을 한 번만 하도록 추적
   const hasAutoPlayedRef = useRef(false);
@@ -52,7 +54,7 @@ function DashboardPage() {
     }
     
     const musicPlayableEvent = events.find(
-      e => e.isResolved !== 'Y' && ['tired', 'emotional'].includes(e.cryType)
+      e => e.isResolved !== 1 && ['tired', 'emotional'].includes(e.cryType)
     );
     
     console.log('🔍 [Dashboard] 음악 재생 가능한 이벤트:', musicPlayableEvent);
@@ -94,6 +96,18 @@ function DashboardPage() {
       console.log('✅ [Dashboard] 설정할 events:', eventsData);
       
       setEvents(eventsData);
+
+      // ✅ 뱃지 로드
+      try {
+        const badgeRes = await axios.get('/api/badges', {
+          headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        });
+        if (badgeRes.data.success) {
+          setBadges(badgeRes.data.badges);
+        }
+      } catch (bErr) {
+        console.error('뱃지 로드 실패:', bErr);
+      }
     } catch (err) {
       console.error('❌ [Dashboard] API 오류:', err);
       console.error('❌ [Dashboard] err.response:', err.response);
@@ -175,12 +189,38 @@ function DashboardPage() {
 
   const stats = {
     totalEvents: events.length,
-    resolvedEvents: events.filter(e => e.isResolved === 'Y').length,
+    resolvedEvents: events.filter(e => e.isResolved === 1).length,
     avgConfidence: events.length > 0 
       ? (events.reduce((sum, e) => sum + (e.confidence || 0), 0) / events.length * 100).toFixed(0)
       : 0,
     mostCommonType: getMostCommonCryType(events),
   };
+
+  // ✅ 2단계 고도화: 원더위크(Wonder Weeks) 계산 로직
+  const calculateWonderWeek = (birthDateString) => {
+    if (!birthDateString) return null;
+    
+    const birthDate = new Date(birthDateString);
+    const today = new Date();
+    const diffTime = Math.abs(today - birthDate);
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    const weeks = Math.floor(diffDays / 7);
+    
+    // 주요 원더위크 주차 (5, 8, 12, 19, 26, 37, 46, 55, 64, 75)
+    const wonderWeeks = [5, 8, 12, 19, 26, 37, 46, 55, 64, 75];
+    const currentWonderWeek = wonderWeeks.find(w => Math.abs(w - weeks) <= 1);
+    
+    if (currentWonderWeek) {
+      return {
+        isWonderWeek: true,
+        week: currentWonderWeek,
+        message: `현재 생후 ${weeks}주차로, 제 ${wonderWeeks.indexOf(currentWonderWeek) + 1}의 도약기(원더위크) 기간일 수 있습니다. 이유 없이 보채거나 울 수 있으니 더 많이 안아주세요.`
+      };
+    }
+    return { isWonderWeek: false, week: weeks };
+  };
+
+  const wonderWeekInfo = calculateWonderWeek(selectedInfant?.birthDate);
 
   console.log('🔍 [Dashboard] 렌더링 상태:', { loading, error, eventsCount: events.length, stats });
 
@@ -220,6 +260,51 @@ function DashboardPage() {
           {selectedInfant?.name || '아기'}의 울음 분석 결과와 조치 기록
         </p>
       </div>
+
+      {/* ✅ 원더위크 알림 배너 */}
+      {wonderWeekInfo?.isWonderWeek && (
+        <div style={{
+          backgroundColor: '#e3f2fd', 
+          padding: '16px', 
+          borderRadius: '12px', 
+          marginBottom: '24px',
+          borderLeft: '5px solid #1976d2',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px'
+        }}>
+          <span style={{fontSize: '24px'}}>🌧️</span>
+          <div>
+            <h4 style={{margin: '0 0 4px 0', color: '#1565c0'}}>원더위크 주의 주간</h4>
+            <p style={{margin: 0, fontSize: '14px', color: '#333'}}>
+              {wonderWeekInfo.message}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ✅ 뱃지 갤러리 UI 추가 */}
+      {badges.length > 0 && (
+        <div style={styles.badgeContainer}>
+          <h3 style={styles.badgeTitle}>🏆 나의 육아 뱃지</h3>
+          <div style={styles.badgeList}>
+            {badges.map(b => (
+              <div 
+                key={b.BADGE_ID} 
+                style={{
+                  ...styles.badgeItem, 
+                  opacity: b.IS_EARNED ? 1 : 0.4,
+                  filter: b.IS_EARNED ? 'none' : 'grayscale(100%)'
+                }}
+                title={b.DESCRIPTION}
+              >
+                <div style={styles.badgeIcon}>{b.ICON_URL}</div>
+                <div style={styles.badgeName}>{b.BADGE_NAME}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ✅ 디버깅: 현재 상태 표시 */}
       <div style={{ 
@@ -941,6 +1026,50 @@ const styles = {
     borderRadius: '6px',
     cursor: 'pointer',
     fontSize: '14px',
+    fontWeight: '600',
+  },
+  // ✅ 뱃지 스타일
+  badgeContainer: {
+    backgroundColor: 'white',
+    borderRadius: '16px',
+    padding: '24px',
+    marginBottom: '24px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+  },
+  badgeTitle: {
+    margin: '0 0 16px 0',
+    fontSize: '18px',
+    color: '#333',
+  },
+  badgeList: {
+    display: 'flex',
+    gap: '16px',
+    overflowX: 'auto',
+    paddingBottom: '10px',
+  },
+  badgeItem: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: '8px',
+    minWidth: '80px',
+    transition: 'transform 0.2s',
+  },
+  badgeIcon: {
+    fontSize: '40px',
+    background: '#f8f9fa',
+    width: '60px',
+    height: '60px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: '50%',
+    boxShadow: 'inset 0 2px 4px rgba(0,0,0,0.05)',
+  },
+  badgeName: {
+    fontSize: '12px',
+    color: '#666',
+    textAlign: 'center',
     fontWeight: '600',
   },
 };

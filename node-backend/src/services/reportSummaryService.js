@@ -275,6 +275,81 @@ async function fetchNextCryPrediction(conn, infantId) {
   return dateObj.toISOString();
 }
 
+/* ✅ 3.0 고도화: 또래 집단 비교 (Peer Analytics) */
+async function fetchPeerComparison(conn, infantId) {
+  try {
+    // 1. 해당 아기의 월령 구하기
+    const infantRes = await conn.execute(
+      `SELECT TRUNC(MONTHS_BETWEEN(SYSDATE, birth_date)) as age_months 
+       FROM infant WHERE infant_id = :infantId`,
+      { infantId },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    
+    if (infantRes.rows.length === 0) return null;
+    const ageMonths = infantRes.rows[0].AGE_MONTHS || 0;
+
+    // 2. 동일 월령(+-1개월) 아기들의 최근 7일 평균 울음 통계 구하기
+    const sql = `
+      WITH peer_infants AS (
+        SELECT infant_id 
+        FROM infant 
+        WHERE TRUNC(MONTHS_BETWEEN(SYSDATE, birth_date)) BETWEEN :ageMin AND :ageMax
+      )
+      SELECT 
+        COUNT(ce.event_id) / NULLIF(COUNT(DISTINCT ce.infant_id), 0) / 7 AS peer_daily_avg_events,
+        SUM(ce.duration_ms) / NULLIF(COUNT(DISTINCT ce.infant_id), 0) / 7 / 1000 AS peer_daily_avg_duration_sec
+      FROM cry_event ce
+      JOIN peer_infants pi ON ce.infant_id = pi.infant_id
+      WHERE ce.event_time >= SYSDATE - 7
+    `;
+    
+    const peerRes = await conn.execute(
+      sql,
+      { ageMin: Math.max(0, ageMonths - 1), ageMax: ageMonths + 1 },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+
+    const row = peerRes.rows[0];
+    return {
+      targetAgeMonths: ageMonths,
+      peerDailyAvgEvents: parseFloat((row.PEER_DAILY_AVG_EVENTS || 0).toFixed(1)),
+      peerDailyAvgDurationSec: parseFloat((row.PEER_DAILY_AVG_DURATION_SEC || 0).toFixed(1))
+    };
+  } catch (err) {
+    console.warn("⚠️ Peer comparison query failed:", err.message);
+    return null;
+  }
+}
+
+/* ✅ 3.0 고도화: Vision AI 분석 기록 조회 (Cross-analysis용) */
+async function fetchVisionAnalysis(conn, infantId, start, end) {
+  try {
+    const sql = `
+      SELECT analysis_type, ai_opinion, severity, created_at
+      FROM vision_analysis
+      WHERE infant_id = :infantId
+        AND created_at BETWEEN :startTime AND :endTime
+      ORDER BY created_at DESC
+    `;
+    const result = await conn.execute(
+      sql,
+      { infantId, startTime: start, endTime: end },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    
+    return result.rows.map(r => ({
+      type: r.ANALYSIS_TYPE,
+      opinion: r.AI_OPINION,
+      severity: r.SEVERITY,
+      createdAt: r.CREATED_AT
+    }));
+  } catch (err) {
+    console.warn("⚠️ Vision analysis query failed:", err.message);
+    return [];
+  }
+}
+
 /* 9) 인사이트 생성 */
 function generateInsights(data) {
   const insights = [];
@@ -348,6 +423,32 @@ function generateInsights(data) {
     }
   }
 
+  // ✅ 3.0 고도화: 또래 집단 비교 인사이트 추가
+  if (data.peerComparison && data.peerComparison.peerDailyAvgEvents > 0) {
+    const myDailyAvg = data.summary.totalEvents / 
+      (Math.max(1, (new Date(data.metadata.periodEnd) - new Date(data.metadata.periodStart)) / (1000 * 60 * 60 * 24)));
+    
+    if (myDailyAvg < data.peerComparison.peerDailyAvgEvents * 0.8) {
+      insights.push({
+        type: 'peer_comparison',
+        title: '또래 대비 안정적',
+        description: `동일 월령(${data.peerComparison.targetAgeMonths}개월) 평균 대비 우는 횟수가 적습니다.`,
+        severity: 'success',
+        actionable: false,
+        recommendation: '아주 잘 하고 계십니다! 현재의 육아 패턴을 유지하세요.'
+      });
+    } else if (myDailyAvg > data.peerComparison.peerDailyAvgEvents * 1.5) {
+      insights.push({
+        type: 'peer_comparison',
+        title: '또래 대비 잦은 보챔',
+        description: `동일 월령 평균(${data.peerComparison.peerDailyAvgEvents}회/일)보다 잦은 보챔이 관찰됩니다.`,
+        severity: 'warning',
+        actionable: true,
+        recommendation: '원더위크 또는 소화 불량 등 원인을 다각도로 분석해보세요.'
+      });
+    }
+  }
+
   return insights;
 }
 
@@ -409,7 +510,9 @@ export async function getSummaryReport(infantId, startDateStr, endDateStr) {
       bySeverity,
       dailyTrend,
       topActions,
-      nextCryPredictionTime
+      nextCryPredictionTime,
+      peerComparison, // ✅ 추가
+      visionAnalysis // ✅ 3.0 고도화 추가
     ] = await Promise.all([
       fetchSummaryStats(conn, infantId, start, end),
       fetchByCryType(conn, infantId, start, end),
@@ -418,7 +521,9 @@ export async function getSummaryReport(infantId, startDateStr, endDateStr) {
       fetchBySeverity(conn, infantId, start, end),
       fetchDailyTrend(conn, infantId, start, end),
       fetchTopActions(conn, infantId, start, end),
-      fetchNextCryPrediction(conn, infantId)
+      fetchNextCryPrediction(conn, infantId),
+      fetchPeerComparison(conn, infantId), // ✅ 추가
+      fetchVisionAnalysis(conn, infantId, start, end) // ✅ 3.0 고도화 추가
     ]);
 
     const reportData = {
@@ -427,7 +532,7 @@ export async function getSummaryReport(infantId, startDateStr, endDateStr) {
         periodStart: start.toISOString(),
         periodEnd: end.toISOString(),
         generatedAt: new Date().toISOString(),
-        reportVersion: '2.0'
+        reportVersion: '3.0' // ✅ 버전 업
       },
 
       summary: {
@@ -466,7 +571,10 @@ export async function getSummaryReport(infantId, startDateStr, endDateStr) {
       prediction: {
         nextCryPredictionTime,
         confidence: nextCryPredictionTime ? 'medium' : 'none'
-      }
+      },
+      
+      peerComparison, // ✅ 추가
+      visionAnalysis // ✅ 3.0 고도화 추가
     };
 
     const insights = generateInsights(reportData);

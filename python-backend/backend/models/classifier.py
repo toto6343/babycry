@@ -215,6 +215,14 @@ class CryClassifier:
             if len(y) == 0:
                 return None
             
+            # ✅ 1단계 고도화: 소음 정화 (Audio Denoising) - High-pass Filter
+            # 아기 울음소리의 주파수 대역(주로 250Hz 이상)을 보존하고 저주파 배경 소음(에어컨, 냉장고 등)을 제거
+            import scipy.signal as signal
+            nyquist = sr / 2
+            cutoff = 250.0  # 250Hz
+            b, a = signal.butter(5, cutoff / nyquist, btype='highpass')
+            y = signal.filtfilt(b, a, y)
+            
             # ✅ 오디오 길이 정규화 (3초로 패딩 또는 자르기)
             target_length = int(sr * duration)
             if len(y) < target_length:
@@ -307,19 +315,51 @@ class CryClassifier:
             print(f"⚠️  Feature extraction error: {e}")
             return None
     
-    def predict_with_confidence(self, audio_path):
+    def extract_voice_profile(self, audio_path):
         """
-        오디오 파일 분석 및 예측
+        ✅ 3.0 고도화: Voice ID (음색 지문 추출)
+        아기의 고유한 목소리 특성(기본 주파수 F0 및 MFCC 평균)을 추출하여 
+        다둥이/조리원 환경에서 '어떤 아기인지' 식별하는 기반 데이터로 사용합니다.
+        """
+        try:
+            y, sr = librosa.load(audio_path, sr=22050, duration=3.0)
+            if len(y) == 0:
+                return None
+            
+            # 1. 기본 주파수 (F0 - Pitch) 추출 (librosa.yin 사용)
+            # 아기 울음소리는 보통 300Hz ~ 600Hz 사이의 높은 피치를 가짐
+            f0 = librosa.yin(y, fmin=200, fmax=800)
+            f0 = f0[f0 > 0] # 0인 부분 제외
+            avg_pitch = float(np.mean(f0)) if len(f0) > 0 else 0.0
+            
+            # 2. 음색 특성 (MFCC) 추출
+            mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+            avg_mfcc = np.mean(mfcc, axis=1).tolist()
+            
+            # 3. 목소리 서명 생성
+            voice_signature = {
+                "pitch_hz": round(avg_pitch, 2),
+                "timbre_features": [round(float(x), 4) for x in avg_mfcc[:5]] # 상위 5개 특성만
+            }
+            return voice_signature
+        except Exception as e:
+            print(f"⚠️ Voice profile extraction failed: {e}")
+            return None
+
+    def predict_with_confidence(self, audio_path, bias=None):
+        """
+        오디오 파일 분석 및 예측 (개인화 바이어스 적용 추가)
         
+        Parameters:
+        -----------
+        audio_path : str
+            오디오 파일 경로
+        bias : dict, optional
+            카테고리별 피드백 통계 { 'tired': 3, 'hungry': 1 }
+            
         Returns:
         --------
-        dict : {
-            'prediction': str,  # 예측 결과
-            'confidence': float,  # 신뢰도
-            'severity': str,  # 심각도 (High/Medium/Low)
-            'probabilities': dict,  # 각 단계별 확률
-            'stage': str  # 어느 단계에서 결정되었는지
-        }
+        dict : 분석 결과
         """
         if not self.detector:
             return {
@@ -347,9 +387,8 @@ class CryClassifier:
         cry_proba = self.detector.predict_proba(features_scaled_phase1)[0]
         is_cry = self.detector.predict(features_scaled_phase1)[0]
         
-        # ⭐ 방어 코드: cry_proba가 예상과 다른 형태일 경우 처리
+        # ⭐ 방어 코드: cry_proba 처리
         if len(cry_proba) == 1:
-            # 단일 클래스만 예측된 경우
             cry_confidence = float(cry_proba[0])
             not_cry_confidence = 1.0 - cry_confidence
             probabilities_dict = {
@@ -357,19 +396,12 @@ class CryClassifier:
                 'not_cry': not_cry_confidence if is_cry == 'cry' else cry_confidence
             }
         else:
-            # 정상적인 경우 (2개 클래스)
-            # detector의 classes_를 확인하여 올바른 인덱스 사용
             classes = self.detector.classes_
             cry_idx = np.where(classes == 'cry')[0]
             not_cry_idx = np.where(classes == 'not_cry')[0]
-            
             cry_confidence = float(cry_proba[cry_idx[0]]) if len(cry_idx) > 0 else float(cry_proba[1])
             not_cry_confidence = float(cry_proba[not_cry_idx[0]]) if len(not_cry_idx) > 0 else float(cry_proba[0])
-            
-            probabilities_dict = {
-                'cry': cry_confidence,
-                'not_cry': not_cry_confidence
-            }
+            probabilities_dict = {'cry': cry_confidence, 'not_cry': not_cry_confidence}
         
         if is_cry == 'not_cry':
             return {
@@ -380,112 +412,61 @@ class CryClassifier:
                 'stage': 'phase1'
             }
         
-        # Stage 1: Primary Pain Detection
+        # Stage 1 & 2: 울음 분석
+        final_prediction = 'discomfort'
+        final_confidence = 0.5
+        final_stage = 'default'
+        
+        # 모든 카테고리에 대한 확률 수집 (바이어스 적용을 위해)
+        all_probs = {}
+        
+        # Stage 1: Pain Detection
         features_scaled_stage1 = self.scaler_stage1.transform(features)
         pain_proba_stage1_raw = self.stage1.predict_proba(features_scaled_stage1)[0]
         
-        # ⭐ 방어 코드: pain_proba 처리
-        if len(pain_proba_stage1_raw) == 1:
-            pain_proba_stage1 = float(pain_proba_stage1_raw[0])
-        else:
-            # Pain 클래스의 인덱스 찾기
-            try:
-                pain_idx = list(self.stage1.classes_).index('belly_pain')
-                pain_proba_stage1 = float(pain_proba_stage1_raw[pain_idx])
-            except (ValueError, AttributeError):
-                # 기본값: 마지막 인덱스 사용
-                pain_proba_stage1 = float(pain_proba_stage1_raw[-1])
+        try:
+            pain_idx = list(self.stage1.classes_).index('belly_pain')
+            pain_proba = float(pain_proba_stage1_raw[pain_idx])
+        except:
+            pain_proba = float(pain_proba_stage1_raw[-1])
+            
+        all_probs['belly_pain'] = pain_proba
         
-        pain_threshold_primary = self.thresholds.get('pain_threshold_primary', 0.5)
-        is_pain_stage1 = pain_proba_stage1 >= pain_threshold_primary
+        # Stage 2: Non-pain
+        if self.stage2_nonpain:
+            features_scaled_stage2 = self.scaler_stage2.transform(features)
+            stage2_probs_raw = self.stage2_nonpain.predict_proba(features_scaled_stage2)[0]
+            for i, cls in enumerate(self.stage2_nonpain.classes_):
+                all_probs[cls] = float(stage2_probs_raw[i])
         
-        probabilities = {
-            'cry': cry_confidence,
-            'pain_stage1': pain_proba_stage1
+        # ✅ 개인화 바이어스 적용 (1단계 기술 고도화)
+        if bias:
+            print(f"🧬 [Personalization] Applying bias: {bias}")
+            for cat, count in bias.items():
+                if cat in all_probs:
+                    # 피드백 1회당 0.05 가산 (최대 0.2)
+                    bonus = min(0.2, count * 0.05)
+                    all_probs[cat] += bonus
+                    print(f"   + Added {bonus:.2f} bonus to '{cat}'")
+            
+            # 합계가 1이 넘을 수 있으므로 정규화 (선택적)
+            # total = sum(all_probs.values())
+            # all_probs = {k: v/total for k, v in all_probs.items()}
+
+        # 가중치 적용 후 가장 높은 확률 찾기
+        best_cat = max(all_probs, key=all_probs.get)
+        final_prediction = best_cat
+        final_confidence = all_probs[best_cat]
+        final_stage = 'personalized_ensemble'
+
+        return {
+            'prediction': final_prediction,
+            'confidence': min(1.0, float(final_confidence)),
+            'severity': self._get_severity(final_confidence),
+            'probabilities': all_probs,
+            'stage': final_stage,
+            'is_personalized': bias is not None
         }
-        
-        if not is_pain_stage1:
-            # Non-Pain Classification
-            if self.stage2_nonpain:
-                features_scaled_stage2 = self.scaler_stage2.transform(features)
-                category = self.stage2_nonpain.predict(features_scaled_stage2)[0]
-                category_proba = self.stage2_nonpain.predict_proba(features_scaled_stage2)[0]
-                confidence = float(np.max(category_proba))
-                
-                return {
-                    'prediction': category,
-                    'confidence': confidence,
-                    'severity': self._get_severity(confidence),
-                    'probabilities': probabilities,
-                    'stage': 'stage2_nonpain'
-                }
-            else:
-                # ✅ 수정: needs_attention → discomfort
-                return {
-                    'prediction': 'discomfort',
-                    'confidence': float(1.0 - pain_proba_stage1),
-                    'severity': 'Medium',
-                    'probabilities': probabilities,
-                    'stage': 'stage1_nonpain'
-                }
-        
-        # Stage 1.5: Cascade Filter
-        if self.cascade_filter:
-            features_scaled_cascade = self.scaler_cascade.transform(features)
-            pain_proba_cascade = self.cascade_filter.predict_proba(features_scaled_cascade)[0, 1]
-            
-            cascade_thresholds = self.thresholds.get('cascade_thresholds', {
-                'high': 0.25, 'balanced': 0.365, 'precise': 0.50
-            })
-            cascade_threshold = cascade_thresholds.get(self.sensitivity, 0.365)
-            is_pain_cascade = pain_proba_cascade >= cascade_threshold
-            
-            probabilities['pain_cascade'] = float(pain_proba_cascade)
-            probabilities['cascade_threshold'] = float(cascade_threshold)
-            
-            if not is_pain_cascade:
-                # Filtered by Cascade -> Re-classify as Non-Pain
-                if self.stage2_nonpain:
-                    features_scaled_stage2 = self.scaler_stage2.transform(features)
-                    category = self.stage2_nonpain.predict(features_scaled_stage2)[0]
-                    category_proba = self.stage2_nonpain.predict_proba(features_scaled_stage2)[0]
-                    confidence = float(np.max(category_proba))
-                    
-                    return {
-                        'prediction': category,
-                        'confidence': confidence,
-                        'severity': self._get_severity(confidence),
-                        'probabilities': probabilities,
-                        'stage': 'cascade_filtered'
-                    }
-                else:
-                    # ✅ 수정: needs_attention → discomfort
-                    return {
-                        'prediction': 'discomfort',
-                        'confidence': float(1.0 - pain_proba_cascade),
-                        'severity': 'Medium',
-                        'probabilities': probabilities,
-                        'stage': 'cascade_filtered'
-                    }
-            
-            # Cascade Confirmed -> Pain
-            return {
-                'prediction': 'belly_pain',
-                'confidence': float(pain_proba_cascade),
-                'severity': self._get_severity(pain_proba_cascade),
-                'probabilities': probabilities,
-                'stage': 'cascade_confirmed'
-            }
-        
-        else:
-            # No Cascade -> Use Stage 1 only
-            return {
-                'prediction': 'belly_pain',
-                'confidence': float(pain_proba_stage1),
-                'severity': self._get_severity(pain_proba_stage1),
-                'probabilities': probabilities,
-                'stage': 'stage1_pain'
-            }
     
     def _get_severity(self, confidence):
         """신뢰도 기반 심각도 계산"""

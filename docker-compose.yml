@@ -1,0 +1,55 @@
+version: '3.8'
+
+# ✅ 3.0 고도화: Edge Device (Raspberry Pi 등) 홈 IoT 배포용 구성
+# 이 파일을 통해 개인 가정 내 로컬 망에서 AI 베이비 모니터를 완전히 무료로 구동할 수 있습니다.
+
+services:
+  python-backend:
+    build: 
+      context: ./python-backend
+      dockerfile: Dockerfile
+    container_name: babycry-ai-engine
+    ports:
+      - "8001:8001"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CRY_SENSITIVITY=balanced
+      - NOTIFICATION_URL=http://node-backend:4000/api/analysis/result
+    volumes:
+      - ./models:/app/models
+      - ./uploads:/app/uploads
+    # 라즈베리파이 등 하드웨어 자원이 제한된 기기 제한 (옵션)
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  node-backend:
+    build:
+      context: ./node-backend
+      dockerfile: Dockerfile
+    container_name: babycry-api-server
+    ports:
+      - "4000:4000"
+    environment:
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_DSN=${DB_DSN}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_PHONE_NUMBER=${TWILIO_PHONE_NUMBER}
+    depends_on:
+      - python-backend
+    restart: always
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: babycry-frontend
+    ports:
+      - "3000:80" # Nginx 등으로 정적 서빙
+    depends_on:
+      - node-backend
+    restart: always

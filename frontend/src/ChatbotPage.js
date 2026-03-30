@@ -1,10 +1,12 @@
 // src/ChatbotPage.js
 import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom'; // ✅ 추가
 import { chatbotAPI } from './api';
 import { useAuth } from './AuthContext';
 
 function ChatbotPage() {
   const { selectedInfant, user } = useAuth();
+  const navigate = useNavigate(); // ✅ 추가
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -91,6 +93,7 @@ function ChatbotPage() {
         role: 'assistant',
         content: response.data.reply || response.data.response || '응답을 받지 못했습니다.',
         timestamp: new Date(),
+        needs_consultation: response.data.needs_consultation, // ✅ 상담 필요 여부 데이터 추가
       };
 
       setMessages((prev) => [...prev, assistantMessage]);
@@ -154,7 +157,11 @@ function ChatbotPage() {
               </div>
             ) : (
               messages.map((message, index) => (
-                <MessageBubble key={index} message={message} />
+                <MessageBubble 
+                  key={index} 
+                  message={message} 
+                  onConsultationClick={() => navigate('/video-call')} // ✅ 추가
+                />
               ))
             )}
             
@@ -221,9 +228,10 @@ function ChatbotPage() {
 }
 
 // 메시지 말풍선 컴포넌트
-function MessageBubble({ message }) {
+function MessageBubble({ message, onConsultationClick }) {
   const isUser = message.role === 'user';
   const isError = message.isError;
+  const needsConsultation = message.needs_consultation; // ✅ 추가
 
   // 메시지 스타일 결정
   let messageTextStyle = { ...styles.messageText };
@@ -254,6 +262,26 @@ function MessageBubble({ message }) {
         )}
         <div style={styles.bubbleContent}>
           <div style={messageTextStyle}>{message.content}</div>
+
+          {/* ✅ 화상 상담 권장 카드 추가 */}
+          {needsConsultation && (
+            <div style={styles.consultationCard}>
+              <div style={styles.consultationHeader}>
+                <span style={styles.consultationIcon}>🚨</span>
+                <span style={styles.consultationTitle}>전문가 상담 권장</span>
+              </div>
+              <div style={styles.consultationText}>
+                현재 분석 결과에 따라, 전문의와 실시간 화상 상담을 진행해 보시는 것을 강력히 추천합니다.
+              </div>
+              <button 
+                onClick={onConsultationClick}
+                style={styles.consultationButton}
+              >
+                화상 상담 시작하기 📹
+              </button>
+            </div>
+          )}
+
           <div style={{
             ...styles.messageTime,
             textAlign: isUser ? 'right' : 'left',
@@ -374,6 +402,50 @@ const styles = {
     fontSize: '13px',
     color: '#999',
     paddingLeft: '8px',
+  },
+  consultationCard: {
+    marginTop: '12px',
+    padding: '16px',
+    backgroundColor: '#fff9c4', // 부드러운 노란색
+    borderRadius: '12px',
+    border: '1px solid #fbc02d',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '10px',
+    boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
+    maxWidth: '100%',
+  },
+  consultationHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  consultationIcon: {
+    fontSize: '24px',
+  },
+  consultationTitle: {
+    fontSize: '18px',
+    fontWeight: 'bold',
+    color: '#d32f2f',
+  },
+  consultationText: {
+    fontSize: '16px',
+    color: '#5d4037',
+    lineHeight: '1.5',
+    fontWeight: '500',
+  },
+  consultationButton: {
+    marginTop: '4px',
+    padding: '12px 18px',
+    backgroundColor: '#d32f2f', // 긴급한 빨간색
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '16px',
+    fontWeight: 'bold',
+    cursor: 'pointer',
+    transition: 'transform 0.2s, background-color 0.2s',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
   },
   loadingMessage: {
     display: 'flex',
